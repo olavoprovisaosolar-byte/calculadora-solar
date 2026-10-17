@@ -1,0 +1,11 @@
+{
+  "name": "solar-durable-backup",
+  "version": "1.0.0",
+  "description": "Cópia pública do backup e pedido de backup do Android.",
+  "main": "index.ts",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

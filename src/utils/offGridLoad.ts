@@ -39,6 +39,50 @@ export const COMMERCIAL_TRAFO_KVA = [1, 1.5, 2, 3, 5, 7.5, 10, 15, 20, 30, 45, 7
 /** Disjuntores CA comerciais (A), do menor para o maior. */
 export const AC_BREAKER_A = [6, 10, 16, 20, 25, 32, 40, 50, 63, 70, 80, 100, 125, 150, 160, 200, 250] as const;
 
+/** Fator de potência da saída em 220 V. Unitário até haver medição de FP. */
+export const OUTPUT_POWER_FACTOR = 1;
+
+/**
+ * Ampacidade de cobre PVC 70 °C, método B1 (NBR 5410).
+ * 2 condutores: monofásico ou bifásico em 220 V. 3 condutores: trifásico.
+ */
+export const COPPER_PVC_AMPACITY: Record<2 | 3, readonly { mm2: number; amps: number }[]> = {
+  2: [
+    { mm2: 1.5, amps: 17.5 },
+    { mm2: 2.5, amps: 24 },
+    { mm2: 4, amps: 32 },
+    { mm2: 6, amps: 41 },
+    { mm2: 10, amps: 57 },
+    { mm2: 16, amps: 76 },
+    { mm2: 25, amps: 101 },
+    { mm2: 35, amps: 125 },
+    { mm2: 50, amps: 151 },
+    { mm2: 70, amps: 192 },
+    { mm2: 95, amps: 232 },
+    { mm2: 120, amps: 269 },
+    { mm2: 150, amps: 309 },
+    { mm2: 185, amps: 353 },
+    { mm2: 240, amps: 415 },
+  ],
+  3: [
+    { mm2: 1.5, amps: 15.5 },
+    { mm2: 2.5, amps: 21 },
+    { mm2: 4, amps: 28 },
+    { mm2: 6, amps: 36 },
+    { mm2: 10, amps: 50 },
+    { mm2: 16, amps: 68 },
+    { mm2: 25, amps: 89 },
+    { mm2: 35, amps: 110 },
+    { mm2: 50, amps: 134 },
+    { mm2: 70, amps: 171 },
+    { mm2: 95, amps: 207 },
+    { mm2: 120, amps: 239 },
+    { mm2: 150, amps: 275 },
+    { mm2: 185, amps: 314 },
+    { mm2: 240, amps: 370 },
+  ],
+};
+
 /** Folga de 30% no trafo: P_trafo = P_127 / 0,70. */
 export const TRAFO_LOAD_FACTOR = 0.7;
 
@@ -191,10 +235,10 @@ export type OffGridLoadResult = {
   /** Alicate nas fases R, S e T. I_Max é o maior valor medido. */
   measuredLine: CorrenteLinhaResult;
   /**
-   * Carga fase-fase repartida em três ramos iguais e convertida para
-   * corrente de linha por soma vetorial. null fora do padrão trifásico.
+   * I_R, I_S e I_T pela soma vetorial das correntes de fase
+   * (I_RS = fase A, I_ST = fase B, I_TR = fase C).
    */
-  phasePhaseVector: CorrenteLinhaResult | null;
+  phasePhaseVector: CorrenteLinhaResult;
   /** Mesma potência total nas três topologias de saída. */
   topology: {
     mono220A: number;
@@ -202,10 +246,17 @@ export type OffGridLoadResult = {
     triphasicA: number;
   };
   /**
-   * Saída trifásica alimentando um padrão trifásico desbalanceado:
-   * a potência do inversor sobe para cada fase entregar I_Max.
+   * Saída trifásica: a potência sobe para cada fase entregar o Imax vetorial.
    */
   sizedByLinePeak: boolean;
+  /** FP usado em I = Ptotal / (220 × FP). */
+  powerFactor: number;
+  /** Disjuntor da saída, acima de 125% da corrente nominal. */
+  outputBreakerA: number;
+  /** Bitola de cobre PVC que suporta o disjuntor. */
+  conductorMm2: number;
+  /** 2 na saída 220 V monofásica/bifásica; 3 na saída trifásica. */
+  conductorCount: 2 | 3;
 };
 
 export function nextCommercialSize(value: number, steps: readonly number[]): number {
@@ -218,6 +269,15 @@ export function nextCommercialSize(value: number, steps: readonly number[]): num
   return Math.ceil((value - 1e-9) / increment) * increment;
 }
 
+/**
+ * Corrente de linha em 220 V: I = Ptotal / (220 × FP).
+ * Vale para a saída monofásica e para a bifásica em 220 V.
+ */
+export function lineCurrent220A(powerW: number, powerFactor = OUTPUT_POWER_FACTOR): number {
+  if (!(powerW > 0) || !(powerFactor > 0)) return 0;
+  return powerW / (220 * powerFactor);
+}
+
 /** Corrente nominal que a topologia de saída precisa entregar. */
 export function nominalOutputCurrentA(
   powerW: number,
@@ -225,12 +285,11 @@ export function nominalOutputCurrentA(
   voltageFn: number,
 ): number {
   if (!(powerW > 0)) return 0;
-  if (acOutput === 'split_phase') return powerW / (2 * 127);
   if (acOutput === 'triphasic') {
     const phaseVoltage = voltageFn > 0 ? voltageFn : 127;
     return powerW / (3 * phaseVoltage);
   }
-  return powerW / 220;
+  return lineCurrent220A(powerW);
 }
 
 /**
@@ -240,6 +299,16 @@ export function nominalOutputCurrentA(
 export function recommendedAcBreakerA(currentA: number): number {
   if (!(currentA > 0)) return 0;
   return nextCommercialSize(currentA * 1.25, AC_BREAKER_A);
+}
+
+/** Menor seção de cobre PVC cuja ampacidade cobre a corrente de projeto. */
+export function recommendedConductorMm2(designA: number, loadedConductors: 2 | 3): number {
+  if (!(designA > 0)) return 0;
+  const table = COPPER_PVC_AMPACITY[loadedConductors];
+  for (const row of table) {
+    if (designA <= row.amps + 1e-9) return row.mm2;
+  }
+  return table[table.length - 1].mm2;
 }
 
 function ceilCount(total: number, unit: number): number {
@@ -376,11 +445,9 @@ export function validateOffGridInput(input: OffGridLoadInput): string | null {
  * P_127 = I_neutro × V_FN
  * P_total = (Σ I_linha medidas) × V_FN
  * P_220 = P_total − P_127
- * Saída monofásica 220 V: I = P_total / 220
- * Saída bifásica nativa: I por fase = P_total / (2 × 127)
- * Saída trifásica equilibrada: I por fase = P_total / (3 × V_FN)
- * Saída trifásica com padrão trifásico: I por fase = max(equilibrada, I_Max)
- *   e P_inv cobre 3 × I_Max × V_FN, para a fase mais carregada caber no inversor.
+ * Saída monofásica ou bifásica 220 V: I = P_total / (220 × FP)
+ * Saída trifásica: I_R, I_S e I_T pela soma vetorial das correntes de fase,
+ *   Imax = max(I_R, I_S, I_T) e P_inv cobre 3 × Imax × V_FN.
  * P_inv = P_demanda / FU
  * E_Wh = P_total × horas / η_inv  (energia real, sem inflar pelo pico)
  */
@@ -417,28 +484,27 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
     I_S: currentB,
     I_T: currentC,
   });
-  const rawLinePeak = Math.max(currentA, currentB, currentC);
-  const phasePhaseVector =
-    input.supply === 'triphasic' && power220W > 0 && voltageFf > 0
-      ? calcularCorrentesLinhaTrifasico({
-          I_RS: power220W / (3 * voltageFf),
-          I_ST: power220W / (3 * voltageFf),
-          I_TR: power220W / (3 * voltageFf),
-        })
-      : null;
+  const phasePhaseVector = calcularCorrentesLinhaTrifasico({
+    I_RS: currentA,
+    I_ST: currentB,
+    I_TR: currentC,
+  });
+  const line220A = lineCurrent220A(powerTotalW, OUTPUT_POWER_FACTOR);
   const topology = {
-    mono220A: nominalOutputCurrentA(powerTotalW, 'mono220', voltageFn),
-    splitPhaseA: nominalOutputCurrentA(powerTotalW, 'split_phase', voltageFn),
-    triphasicA: nominalOutputCurrentA(powerTotalW, 'triphasic', voltageFn),
+    mono220A: line220A,
+    splitPhaseA: line220A,
+    triphasicA: phasePhaseVector.I_Max,
   };
 
-  const coversUnbalancedBoard = input.supply === 'triphasic' && input.acOutput === 'triphasic';
-  const peakDemandW = 3 * rawLinePeak * voltageFn;
-  const sizedByLinePeak = coversUnbalancedBoard && peakDemandW > powerTotalW + 1e-6;
-  const demandW = coversUnbalancedBoard ? Math.max(powerTotalW, peakDemandW) : powerTotalW;
-  const balancedOut = nominalOutputCurrentA(powerTotalW, input.acOutput, voltageFn);
-  const currentInverterA = coversUnbalancedBoard ? Math.max(balancedOut, rawLinePeak) : balancedOut;
+  const triOutput = input.acOutput === 'triphasic';
+  const peakDemandW = 3 * phasePhaseVector.I_Max * voltageFn;
+  const sizedByLinePeak = triOutput && peakDemandW > powerTotalW + 1e-6;
+  const demandW = triOutput ? Math.max(powerTotalW, peakDemandW) : powerTotalW;
+  const currentInverterA = triOutput ? phasePhaseVector.I_Max : line220A;
   const inverterMinW = input.utilizationFactor > 0 ? demandW / input.utilizationFactor : 0;
+  const outputBreakerA = recommendedAcBreakerA(currentInverterA);
+  const conductorCount: 2 | 3 = triOutput ? 3 : 2;
+  const conductorMm2 = recommendedConductorMm2(outputBreakerA, conductorCount);
   const inverterSuggestedKw = nextCommercialSize(inverterMinW / 1000, COMMERCIAL_INVERTER_KW);
 
   const hasNeutralSplit = input.supply === 'biphasic' || input.supply === 'triphasic';
@@ -513,5 +579,9 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
     phasePhaseVector,
     topology,
     sizedByLinePeak,
+    powerFactor: OUTPUT_POWER_FACTOR,
+    outputBreakerA,
+    conductorMm2,
+    conductorCount,
   };
 }

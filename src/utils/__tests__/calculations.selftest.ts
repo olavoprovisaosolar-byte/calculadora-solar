@@ -42,8 +42,10 @@ import {
 } from '../offGridReport';
 import {
   calculateOffGridLoad,
+  lineCurrent220A,
   nextCommercialSize,
   recommendedAcBreakerA,
+  recommendedConductorMm2,
   validateOffGridInput,
   type OffGridLoadInput,
 } from '../offGridLoad';
@@ -408,7 +410,8 @@ assert(removeSurvey([...clients, ...joao], 'joao-1').length === 1, 'Excluir tira
 assert(apkFileName('1.0.42') === 'SolarCalculator-v1.0.42.apk', 'Nome do APK inclui a versão');
 assert(apkFileName('1.0.43') === 'SolarCalculator-v1.0.43.apk', 'Nome do APK acompanha a versão nova');
 assert(apkFileName('v1.0.43') === 'SolarCalculator-v1.0.43.apk', 'Nome do APK ignora o prefixo v');
-assert(apkReleaseTag('1.0.43') === 'solar-calculator-v1.0.43', 'Tag de release segue a versão');
+assert(apkFileName('1.0.44') === 'SolarCalculator-v1.0.44.apk', 'APK 1.0.44 leva a versão no nome');
+assert(apkReleaseTag('1.0.44') === 'v1.0.44', 'Tag de release é v1.0.44');
 {
   const pkg = JSON.parse(
     readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../package.json'), 'utf8'),
@@ -494,9 +497,11 @@ assert(almostEqual(offGrid.power127W, 8 * 127), 'P127 = Ineutro × Vfn');
 assert(almostEqual(offGrid.powerTotalW, (20 + 15) * 127), 'Ptotal bifásico ignora fase C');
 assert(almostEqual(offGrid.power220W, offGrid.powerTotalW - offGrid.power127W), 'P220 = Ptotal − P127');
 assert(offGrid.voltageFn === 127 && offGrid.voltageFf === 220, 'Bifásico trava 127/220 V');
-assert(almostEqual(offGrid.currentInverterA, offGrid.powerTotalW / 220), 'Saída 220 V monofásica: I = Ptotal / 220');
+assert(almostEqual(offGrid.currentInverterA, lineCurrent220A(offGrid.powerTotalW)), 'Saída 220 V: I = Ptotal / (220 × FP)');
+assert(offGrid.powerFactor === 1, 'FP unitário na saída 220 V');
+assert(offGrid.outputBreakerA === 32 && offGrid.conductorMm2 === 4 && offGrid.conductorCount === 2, 'Monofásico 220 V: disjuntor 32 A e cabo 4 mm²');
 assert(
-  describeOutputCurrent(offGridBase, offGrid) === 'Corrente Nominal de Saída: 20,2 A (Monofásico 220V)',
+  describeOutputCurrent(offGridBase, offGrid) === 'Inversor Monofásico 220V: 20,2 A (Ptotal / (220 × FP))',
   describeOutputCurrent(offGridBase, offGrid),
 );
 assert(offGrid.transformerStatus === 'required', 'Bifásico com saída 220 V monofásica exige autotransformador');
@@ -544,23 +549,28 @@ const tri = calculateOffGridLoad({ ...offGridBase, supply: 'triphasic' });
 assert(almostEqual(tri.powerTotalW, (20 + 15 + 40) * 127), 'Ptotal trifásico soma fase C');
 assert(tri.measuredLine.I_R === 20 && tri.measuredLine.I_S === 15 && tri.measuredLine.I_T === 40, 'Alicate trifásico guarda R, S e T');
 assert(tri.measuredLine.I_Max === 40, 'Imax medido é a fase mais carregada');
-assert(tri.phasePhaseVector !== null, 'Carga fase-fase trifásica passa pela soma vetorial');
-const branch = tri.power220W / (3 * 220);
-const expectedVector = Math.round(Math.sqrt(3) * branch * 100) / 100;
-assert(tri.phasePhaseVector?.I_R === expectedVector, `Linha vetorial da fase-fase, veio ${tri.phasePhaseVector?.I_R}`);
-assert(tri.phasePhaseVector?.I_Max === tri.phasePhaseVector?.I_R, 'Ramos iguais produzem linhas iguais');
+const vectorTri = calcularCorrentesLinhaTrifasico({ I_RS: 20, I_ST: 15, I_TR: 40 });
+assert(
+  tri.phasePhaseVector.I_R === vectorTri.I_R && tri.phasePhaseVector.I_Max === vectorTri.I_Max,
+  'Saída trifásica usa a soma vetorial das fases medidas',
+);
 assert(!tri.sizedByLinePeak, 'Saída monofásica não infla o inversor pelo Imax');
 assert(describeTopologyComparison(tri).includes('Monofásico 220 V'), describeTopologyComparison(tri));
 assert(describeLinePeak(tri).includes('Imax medido 40'), describeLinePeak(tri));
 
 const triUnbalanced = calculateOffGridLoad({ ...offGridBase, supply: 'triphasic', acOutput: 'triphasic' });
-assert(almostEqual(triUnbalanced.currentInverterA, 40), 'Saída trifásica usa Imax e não a média');
+assert(almostEqual(triUnbalanced.currentInverterA, vectorTri.I_Max), 'Saída trifásica usa o Imax vetorial');
 assert(triUnbalanced.sizedByLinePeak, 'Desbalanceamento eleva o inversor trifásico');
 assert(
-  almostEqual(triUnbalanced.inverterMinW, (3 * 40 * 127) / 0.8),
+  almostEqual(triUnbalanced.inverterMinW, (3 * vectorTri.I_Max * 127) / 0.8),
   'Pinv trifásico cobre 3 × Imax × Vfn',
 );
-assert(triUnbalanced.inverterSuggestedKw === 20, `Inversor do pico esperado 20 kW, veio ${triUnbalanced.inverterSuggestedKw}`);
+assert(triUnbalanced.inverterSuggestedKw === 30, `Inversor do pico esperado 30 kW, veio ${triUnbalanced.inverterSuggestedKw}`);
+assert(triUnbalanced.conductorCount === 3, 'Saída trifásica pede 3 condutores');
+assert(
+  triUnbalanced.conductorMm2 === recommendedConductorMm2(triUnbalanced.outputBreakerA, 3),
+  'Bitola cobre o disjuntor trifásico',
+);
 assert(
   almostEqual(triUnbalanced.energyWh, triUnbalanced.powerTotalW * 12 / 0.92, 0.05),
   'A energia do banco continua na potência real',
@@ -574,8 +584,11 @@ const triBalanced = calculateOffGridLoad({
   currentC: 10,
   currentNeutral: 0,
 });
-assert(!triBalanced.sizedByLinePeak, 'Fases iguais não pedem folga extra de Imax');
-assert(almostEqual(triBalanced.currentInverterA, 10), 'Trifásico equilibrado: I = corrente de cada fase');
+assert(triBalanced.sizedByLinePeak, 'Ramos iguais ainda geram linha √3 vezes maior');
+assert(
+  almostEqual(triBalanced.currentInverterA, calcularCorrentesLinhaTrifasico({ I_RS: 10, I_ST: 10, I_TR: 10 }).I_Max),
+  'Trifásico equilibrado: Imax é a linha vetorial',
+);
 assert(tri.transformerStatus === 'required', 'Trifásico com saída 220 V monofásica exige autotransformador');
 const tri380 = calculateOffGridLoad({ ...offGridBase, supply: 'triphasic', triPair: '220_380' });
 assert(tri380.voltageFn === 220 && tri380.voltageFf === 380, 'Trifásico 220/380 usa essas tensões');
@@ -698,7 +711,8 @@ assert(report.includes('Manaus/AM'), 'Relatório cita a localidade');
 assert(report.includes('07/10/2026'), 'Relatório cita a data');
 assert(report.includes('Bifásico'), 'Relatório cita o padrão da rede');
 assert(report.includes('80% de uso (20% de folga técnica)'), 'Relatório explica o fator de utilização');
-assert(report.includes('20,2 A (Monofásico 220V)'), 'Relatório repete a corrente da saída monofásica');
+assert(report.includes('Inversor Monofásico 220V: 20,2 A'), 'Relatório repete a corrente da saída monofásica');
+assert(report.includes('4 mm²'), 'Relatório cita a bitola do condutor');
 assert(report.includes('Disjuntor CA Recomendado: 32 A'), 'Relatório recomenda o disjuntor');
 assert(report.includes('Arranjo:'), 'Relatório traz o guia de arranjo');
 assert(report.includes(FIELD_HELP.neutral), 'Relatório inclui a explicação do neutro');
@@ -716,25 +730,24 @@ const split = calculateOffGridLoad({ ...offGridBase, acOutput: 'split_phase' });
 assert(split.transformerStatus === 'native_neutral', 'Bifásico nativo dispensa autotransformador');
 assert(split.transformerSuggestedKva === 0, 'Sem kVA de trafo na saída bifásica');
 assert(
-  almostEqual(split.currentInverterA, split.powerTotalW / (2 * 127)),
-  'Bifásico nativo: corrente por fase em 127 V',
+  almostEqual(split.currentInverterA, lineCurrent220A(split.powerTotalW)),
+  'Bifásico 220 V: I = Ptotal / (220 × FP)',
 );
+assert(split.conductorCount === 2 && split.outputBreakerA === offGrid.outputBreakerA, 'Bifásico 220 V usa o mesmo disjuntor da corrente de linha');
 assert(
   describeOutputCurrent({ ...offGridBase, acOutput: 'split_phase' }, split) ===
-    'Corrente Nominal de Saída: 17,5 A por Fase (127V/220V)',
+    'Inversor Bifásico 220V: 20,2 A (Ptotal / (220 × FP))',
   describeOutputCurrent({ ...offGridBase, acOutput: 'split_phase' }, split),
 );
 const splitReport = buildOffGridReportHtml({ ...offGridBase, acOutput: 'split_phase' }, split, reportMeta);
 assert(splitReport.includes(FIELD_HELP.nativeNeutral), 'PDF repete o aviso de neutro nativo');
 const triOut = calculateOffGridLoad({ ...offGridBase, acOutput: 'triphasic' });
 assert(triOut.transformerStatus === 'native_neutral', 'Trifásico nativo dispensa autotransformador');
+const vectorBi = calcularCorrentesLinhaTrifasico({ I_RS: 20, I_ST: 15, I_TR: 0 });
+assert(almostEqual(triOut.currentInverterA, vectorBi.I_Max), 'Trifásico na medição bifásica usa o Imax vetorial');
+assert(triOut.inverterSuggestedKw !== offGrid.inverterSuggestedKw, 'Trocar para trifásico muda o porte do inversor');
 assert(
-  almostEqual(triOut.currentInverterA, triOut.powerTotalW / (3 * 127)),
-  'Trifásico 127/220: corrente por fase',
-);
-assert(
-  describeOutputCurrent({ ...offGridBase, acOutput: 'triphasic' }, triOut) ===
-    'Corrente Nominal de Saída: 11,67 A por Fase (Trifásico)',
+  describeOutputCurrent({ ...offGridBase, acOutput: 'triphasic' }, triOut).includes('Inversor Trifásico'),
   describeOutputCurrent({ ...offGridBase, acOutput: 'triphasic' }, triOut),
 );
 const tri380Out = calculateOffGridLoad({
@@ -743,11 +756,8 @@ const tri380Out = calculateOffGridLoad({
   triPair: '220_380',
   acOutput: 'triphasic',
 });
-assert(
-  almostEqual(tri380Out.topology.triphasicA, tri380Out.powerTotalW / (3 * 220)),
-  'Trifásico 220/380 equilibrado: corrente média por fase em 220 V',
-);
-assert(almostEqual(tri380Out.currentInverterA, 40), 'Trifásico 220/380 desbalanceado entrega Imax na saída');
+assert(almostEqual(tri380Out.topology.triphasicA, vectorTri.I_Max), '220/380 trifásico publica o Imax vetorial');
+assert(almostEqual(tri380Out.currentInverterA, vectorTri.I_Max), 'Trifásico 220/380 entrega o Imax vetorial');
 assert(tri380Out.sizedByLinePeak, '220/380 desbalanceado eleva o inversor pelo Imax');
 const monoOut = calculateOffGridLoad({ ...offGridBase, supply: 'mono', monoVoltage: 127, currentA: 8, acOutput: 'split_phase' });
 assert(monoOut.transformerStatus === 'native_neutral', 'Saída com neutro nativo avisa mesmo no padrão monofásico');

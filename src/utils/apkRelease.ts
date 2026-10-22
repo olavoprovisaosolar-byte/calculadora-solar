@@ -13,5 +13,5 @@ export function apkFileName(version: string): string {
 }
 
 export function apkReleaseTag(version: string): string {
-  return `solar-calculator-v${appVersionOf(version)}`;
+  return `v${appVersionOf(version)}`;
 }

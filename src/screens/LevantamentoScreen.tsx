@@ -36,6 +36,7 @@ import {
   describeAssembly,
   describeLinePeak,
   describeOutputCurrent,
+  describeOutputProtection,
   describeTopologyComparison,
   describeTransformer,
   dodConsideredLabel,
@@ -951,11 +952,8 @@ export function LevantamentoScreen() {
           >
             <Text style={[styles.cardTitle, { color: colors.text }]}>Inversor recomendado</Text>
             <Text style={[styles.headline, { color: colors.accent }]}>
-              Inversor Recomendado: {formatNumber(result.inverterSuggestedKw)} kW
+              {acOutputTag(acOutput)}: {formatNumber(result.inverterSuggestedKw)} kW
             </Text>
-            <View style={[styles.tag, { backgroundColor: colors.primarySoft }]}>
-              <Text style={[styles.tagText, { color: colors.primary }]}>{acOutputTag(acOutput)}</Text>
-            </View>
             <Metric
               label="Potência mínima calculada"
               value={`${formatNumber(result.inverterMinW / 1000)} kW`}
@@ -964,11 +962,14 @@ export function LevantamentoScreen() {
               label="Fator de ocupação aplicado"
               value={`${formatNumber(result.utilizationFactor * 100, 0)}%`}
             />
+            <Text style={[styles.fieldCaption, { color: colors.textSecondary }]}>
+              {describeOutputProtection(result)}
+            </Text>
           </View>
           {result.sizedByLinePeak ? (
             <Banner
               tone="warning"
-              text="A fase mais carregada define o inversor trifásico. A potência mínima usa 3 × Imax × tensão fase-neutro, para cada fase entregar a corrente de pico medida."
+              text="Inversor trifásico pela fase mais carregada. I_R, I_S e I_T usam a soma vetorial, e a potência mínima cobre 3 × Imax × tensão fase-neutro."
             />
           ) : null}
           <Banner

@@ -57,9 +57,9 @@ export function supplyHelp(supply: SupplyStandard): string {
 }
 
 export function acOutputTag(output: AcOutputTopology): string {
-  if (output === 'mono220') return 'Saída AC: 220V Monofásica';
-  if (output === 'split_phase') return 'Saída AC: Bifásica Nativa (127V/220V)';
-  return 'Saída AC: Trifásica Nativa (3F+N)';
+  if (output === 'mono220') return 'Inversor Monofásico 220V';
+  if (output === 'split_phase') return 'Inversor Bifásico 220V';
+  return 'Inversor Trifásico';
 }
 
 export function acOutputTitle(output: AcOutputTopology): string {
@@ -102,27 +102,35 @@ function pct(fraction: number): string {
 /** Compara a mesma potência nas três topologias de saída. */
 export function describeTopologyComparison(result: OffGridLoadResult): string {
   const { mono220A, splitPhaseA, triphasicA } = result.topology;
-  return `Monofásico 220 V: ${formatNumber(mono220A)} A · Bifásico nativo: ${formatNumber(splitPhaseA)} A por fase · Trifásico equilibrado: ${formatNumber(triphasicA)} A por fase`;
+  return `Monofásico 220 V: ${formatNumber(mono220A)} A · Bifásico 220 V: ${formatNumber(splitPhaseA)} A · Trifásico Imax: ${formatNumber(triphasicA)} A`;
 }
 
-/** Pico medido no alicate e, no trifásico, a linha da carga fase-fase vetorial. */
+/** Pico medido no alicate e a linha vetorial I_R, I_S, I_T. */
 export function describeLinePeak(result: OffGridLoadResult): string {
   const measured = `Imax medido ${formatNumber(result.measuredLine.I_Max)} A (R ${formatNumber(result.measuredLine.I_R)} · S ${formatNumber(result.measuredLine.I_S)} · T ${formatNumber(result.measuredLine.I_T)})`;
-  if (!result.phasePhaseVector) return measured;
   const vector = result.phasePhaseVector;
-  return `${measured}. Carga fase-fase equilibrada na linha (soma vetorial): R ${formatNumber(vector.I_R)} · S ${formatNumber(vector.I_S)} · T ${formatNumber(vector.I_T)} · Imax ${formatNumber(vector.I_Max)} A`;
+  return `${measured}. Soma vetorial: R ${formatNumber(vector.I_R)} A · S ${formatNumber(vector.I_S)} A · T ${formatNumber(vector.I_T)} A · Imax ${formatNumber(vector.I_Max)} A`;
+}
+
+export function describeOutputProtection(result: OffGridLoadResult): string {
+  const section = Number.isInteger(result.conductorMm2)
+    ? String(result.conductorMm2)
+    : formatNumber(result.conductorMm2);
+  const poles = result.conductorCount === 3 ? '3 condutores' : '2 condutores';
+  return `Disjuntor CA: ${result.outputBreakerA} A · Condutor de alimentação: ${section} mm² (cobre PVC, ${poles})`;
 }
 
 /** Frase do card de resultados, também repetida no PDF. */
 export function describeOutputCurrent(input: OffGridLoadInput, result: OffGridLoadResult): string {
   const amps = formatNumber(result.currentInverterA);
   if (input.acOutput === 'triphasic') {
-    return `Corrente Nominal de Saída: ${amps} A por Fase (Trifásico)`;
+    const vector = result.phasePhaseVector;
+    return `Inversor Trifásico: R ${formatNumber(vector.I_R)} A · S ${formatNumber(vector.I_S)} A · T ${formatNumber(vector.I_T)} A · Imax ${amps} A`;
   }
   if (input.acOutput === 'split_phase') {
-    return `Corrente Nominal de Saída: ${amps} A por Fase (127V/220V)`;
+    return `Inversor Bifásico 220V: ${amps} A (Ptotal / (220 × FP))`;
   }
-  return `Corrente Nominal de Saída: ${amps} A (Monofásico 220V)`;
+  return `Inversor Monofásico 220V: ${amps} A (Ptotal / (220 × FP))`;
 }
 
 export function describeTransformer(result: OffGridLoadResult): string {
@@ -473,7 +481,7 @@ export function buildOffGridReportHtml(
       <p class="caption">${esc(describeLinePeak(result))}</p>
       ${
         result.sizedByLinePeak
-          ? '<p class="note warn">Desbalanceamento: o inversor trifásico foi elevado para cada fase entregar a corrente Imax medida, e não só a média P / (3 × Vfn).</p>'
+          ? '<p class="note warn">Saída trifásica: I_R, I_S e I_T saem da soma vetorial. O inversor cobre a fase mais carregada (Imax).</p>'
           : ''
       }
       <div class="minis">
@@ -502,6 +510,7 @@ export function buildOffGridReportHtml(
           <div><div class="label">Fator de Utilização Aplicado</div><div class="value">${esc(utilizationLine(result.utilizationFactor))}</div></div>
           <div><div class="label">Corrente Nominal de Saída</div><div class="value">${esc(outputCurrentValue(input, result))}</div></div>
           <div><div class="label">Orientação de Proteção</div><div class="value">Disjuntor CA Recomendado: ${breakerA > 0 ? `${breakerA} A` : 'a definir'}</div></div>
+          <div><div class="label">Condutor de alimentação</div><div class="value">${esc(describeOutputProtection(result))}</div></div>
         </div>
         <p class="caption">${esc(acOutputTitle(input.acOutput))}. ${esc(outputHelp)}</p>
       </section>

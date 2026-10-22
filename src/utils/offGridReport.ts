@@ -99,6 +99,20 @@ function pct(fraction: number): string {
   return `${formatNumber(fraction * 100, 1)}%`;
 }
 
+/** Compara a mesma potência nas três topologias de saída. */
+export function describeTopologyComparison(result: OffGridLoadResult): string {
+  const { mono220A, splitPhaseA, triphasicA } = result.topology;
+  return `Monofásico 220 V: ${formatNumber(mono220A)} A · Bifásico nativo: ${formatNumber(splitPhaseA)} A por fase · Trifásico equilibrado: ${formatNumber(triphasicA)} A por fase`;
+}
+
+/** Pico medido no alicate e, no trifásico, a linha da carga fase-fase vetorial. */
+export function describeLinePeak(result: OffGridLoadResult): string {
+  const measured = `Imax medido ${formatNumber(result.measuredLine.I_Max)} A (R ${formatNumber(result.measuredLine.I_R)} · S ${formatNumber(result.measuredLine.I_S)} · T ${formatNumber(result.measuredLine.I_T)})`;
+  if (!result.phasePhaseVector) return measured;
+  const vector = result.phasePhaseVector;
+  return `${measured}. Carga fase-fase equilibrada na linha (soma vetorial): R ${formatNumber(vector.I_R)} · S ${formatNumber(vector.I_S)} · T ${formatNumber(vector.I_T)} · Imax ${formatNumber(vector.I_Max)} A`;
+}
+
 /** Frase do card de resultados, também repetida no PDF. */
 export function describeOutputCurrent(input: OffGridLoadInput, result: OffGridLoadResult): string {
   const amps = formatNumber(result.currentInverterA);
@@ -455,6 +469,13 @@ export function buildOffGridReportHtml(
         <tbody>${table}</tbody>
       </table>
       ${neutralNote}
+      <p class="caption">${esc(describeTopologyComparison(result))}</p>
+      <p class="caption">${esc(describeLinePeak(result))}</p>
+      ${
+        result.sizedByLinePeak
+          ? '<p class="note warn">Desbalanceamento: o inversor trifásico foi elevado para cada fase entregar a corrente Imax medida, e não só a média P / (3 × Vfn).</p>'
+          : ''
+      }
       <div class="minis">
         <div class="mini">
           <div class="label">Carga Total Medida (kW)</div>

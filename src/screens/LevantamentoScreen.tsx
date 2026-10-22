@@ -34,7 +34,9 @@ import {
   acOutputTag,
   buildOffGridReportHtml,
   describeAssembly,
+  describeLinePeak,
   describeOutputCurrent,
+  describeTopologyComparison,
   describeTransformer,
   dodConsideredLabel,
   FIELD_HELP,
@@ -927,6 +929,12 @@ export function LevantamentoScreen() {
             <Text style={[styles.outputCurrent, { color: colors.text, borderTopColor: colors.border }]}>
               {describeOutputCurrent(draft, result)}
             </Text>
+            <Text style={[styles.fieldCaption, { color: colors.textSecondary }]}>
+              {describeTopologyComparison(result)}
+            </Text>
+            <Text style={[styles.fieldCaption, { color: colors.textSecondary }]}>
+              {describeLinePeak(result)}
+            </Text>
             {result.neutralInconsistent ? (
               <Banner
                 tone="warning"
@@ -957,6 +965,12 @@ export function LevantamentoScreen() {
               value={`${formatNumber(result.utilizationFactor * 100, 0)}%`}
             />
           </View>
+          {result.sizedByLinePeak ? (
+            <Banner
+              tone="warning"
+              text="A fase mais carregada define o inversor trifásico. A potência mínima usa 3 × Imax × tensão fase-neutro, para cada fase entregar a corrente de pico medida."
+            />
+          ) : null}
           <Banner
             tone={result.surgeMarginTight ? 'warning' : 'info'}
             text={

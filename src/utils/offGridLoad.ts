@@ -1,7 +1,17 @@
 /**
  * Levantamento de carga (alicate) e dimensionamento off-grid / retrofit.
  * Potências em W, tensões em V, correntes em A, energia em Wh.
+ *
+ * As leituras A/B/C são correntes de linha já medidas no condutor.
+ * A potência usa a soma aritmética dessas leituras (Σ I_linha × V_FN).
+ * A soma vetorial entra só na carga fase-fase, quando os ramos RS/ST/TR
+ * são conhecidos, e o I_Max medido cobre o desbalanceamento na saída trifásica.
  */
+import {
+  calcularCorrentesLinhaTrifasico,
+  correntesLinhaMedidas,
+  type CorrenteLinhaResult,
+} from './threePhaseCurrents';
 
 export type BatteryTech = 'lithium' | 'stationary';
 export type BatteryModelId = 'li-48-100' | 'li-24-100' | 'st-12-240' | 'st-12-150';
@@ -178,6 +188,24 @@ export type OffGridLoadResult = {
     stationary: BatteryArrangement;
   };
   neutralInconsistent: boolean;
+  /** Alicate nas fases R, S e T. I_Max é o maior valor medido. */
+  measuredLine: CorrenteLinhaResult;
+  /**
+   * Carga fase-fase repartida em três ramos iguais e convertida para
+   * corrente de linha por soma vetorial. null fora do padrão trifásico.
+   */
+  phasePhaseVector: CorrenteLinhaResult | null;
+  /** Mesma potência total nas três topologias de saída. */
+  topology: {
+    mono220A: number;
+    splitPhaseA: number;
+    triphasicA: number;
+  };
+  /**
+   * Saída trifásica alimentando um padrão trifásico desbalanceado:
+   * a potência do inversor sobe para cada fase entregar I_Max.
+   */
+  sizedByLinePeak: boolean;
 };
 
 export function nextCommercialSize(value: number, steps: readonly number[]): number {
@@ -346,13 +374,15 @@ export function validateOffGridInput(input: OffGridLoadInput): string | null {
 /**
  * Separa carga 127 V (pelo neutro) e 220 V, dimensiona inversor, trafo e banco.
  * P_127 = I_neutro × V_FN
- * P_total = (Σ I_fases) × V_FN
+ * P_total = (Σ I_linha medidas) × V_FN
  * P_220 = P_total − P_127
  * Saída monofásica 220 V: I = P_total / 220
  * Saída bifásica nativa: I por fase = P_total / (2 × 127)
- * Saída trifásica: I por fase = P_total / (3 × V_FN)
- * P_inv = P_total / FU
- * E_Wh = P_total × horas / η_inv
+ * Saída trifásica equilibrada: I por fase = P_total / (3 × V_FN)
+ * Saída trifásica com padrão trifásico: I por fase = max(equilibrada, I_Max)
+ *   e P_inv cobre 3 × I_Max × V_FN, para a fase mais carregada caber no inversor.
+ * P_inv = P_demanda / FU
+ * E_Wh = P_total × horas / η_inv  (energia real, sem inflar pelo pico)
  */
 export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult {
   const { voltageFn, voltageFf } = supplyVoltages(input);
@@ -382,9 +412,33 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
   const share127 = powerTotalW > 0 ? chart127 / powerTotalW : 0;
   const share220 = powerTotalW > 0 ? 1 - share127 : 0;
 
-  const currentInverterA = nominalOutputCurrentA(powerTotalW, input.acOutput, voltageFn);
-  const inverterMinW =
-    input.utilizationFactor > 0 ? powerTotalW / input.utilizationFactor : 0;
+  const measuredLine = correntesLinhaMedidas({
+    I_R: currentA,
+    I_S: currentB,
+    I_T: currentC,
+  });
+  const rawLinePeak = Math.max(currentA, currentB, currentC);
+  const phasePhaseVector =
+    input.supply === 'triphasic' && power220W > 0 && voltageFf > 0
+      ? calcularCorrentesLinhaTrifasico({
+          I_RS: power220W / (3 * voltageFf),
+          I_ST: power220W / (3 * voltageFf),
+          I_TR: power220W / (3 * voltageFf),
+        })
+      : null;
+  const topology = {
+    mono220A: nominalOutputCurrentA(powerTotalW, 'mono220', voltageFn),
+    splitPhaseA: nominalOutputCurrentA(powerTotalW, 'split_phase', voltageFn),
+    triphasicA: nominalOutputCurrentA(powerTotalW, 'triphasic', voltageFn),
+  };
+
+  const coversUnbalancedBoard = input.supply === 'triphasic' && input.acOutput === 'triphasic';
+  const peakDemandW = 3 * rawLinePeak * voltageFn;
+  const sizedByLinePeak = coversUnbalancedBoard && peakDemandW > powerTotalW + 1e-6;
+  const demandW = coversUnbalancedBoard ? Math.max(powerTotalW, peakDemandW) : powerTotalW;
+  const balancedOut = nominalOutputCurrentA(powerTotalW, input.acOutput, voltageFn);
+  const currentInverterA = coversUnbalancedBoard ? Math.max(balancedOut, rawLinePeak) : balancedOut;
+  const inverterMinW = input.utilizationFactor > 0 ? demandW / input.utilizationFactor : 0;
   const inverterSuggestedKw = nextCommercialSize(inverterMinW / 1000, COMMERCIAL_INVERTER_KW);
 
   const hasNeutralSplit = input.supply === 'biphasic' || input.supply === 'triphasic';
@@ -455,5 +509,9 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
       ),
     },
     neutralInconsistent,
+    measuredLine,
+    phasePhaseVector,
+    topology,
+    sizedByLinePeak,
   };
 }

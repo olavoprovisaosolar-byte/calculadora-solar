@@ -3,6 +3,7 @@ import {
   AcOutputTopology,
   batteryModelById,
   BatteryTech,
+  CABLE_INSULATION_LABEL,
   OffGridLoadInput,
   OffGridLoadResult,
   recommendedAcBreakerA,
@@ -116,8 +117,8 @@ export function describeOutputProtection(result: OffGridLoadResult): string {
   const section = Number.isInteger(result.conductorMm2)
     ? String(result.conductorMm2)
     : formatNumber(result.conductorMm2);
-  const poles = result.conductorCount === 3 ? '3 condutores' : '2 condutores';
-  return `Disjuntor CA: ${result.outputBreakerA} A · Condutor de alimentação: ${section} mm² (cobre PVC, ${poles})`;
+  const poles = result.conductorCount === 3 ? '3 condutores carregados' : '2 condutores carregados';
+  return `Disjuntor CA: ${result.outputBreakerA} A · Condutor de alimentação: ${section} mm² (${CABLE_INSULATION_LABEL[result.cableInsulation]}, ${poles}, método B1)`;
 }
 
 /** Frase do card de resultados, também repetida no PDF. */

@@ -21,6 +21,9 @@ import {
   BatteryModelId,
   BatteryTech,
   BusVoltageV,
+  CableInsulation,
+  CABLE_INSULATION_LABEL,
+  cableInsulationOf,
   calculateOffGridLoad,
   DOD_RANGE,
   modelsForTech,
@@ -88,6 +91,7 @@ export function LevantamentoScreen() {
   const [currentNeutralText, setCurrentNeutralText] = useState('');
   const [utilization, setUtilization] = useState(0.8);
   const [acOutput, setAcOutput] = useState<AcOutputTopology>('mono220');
+  const [cableInsulation, setCableInsulation] = useState<CableInsulation>('pvc70');
   const [inverterBus, setInverterBus] = useState<BusVoltageV>(48);
   const [busVoltage, setBusVoltage] = useState<BusVoltageV>(48);
   const [busTouched, setBusTouched] = useState(false);
@@ -133,6 +137,7 @@ export function LevantamentoScreen() {
       setCurrentNeutralText(draft.currentNeutralText ?? '');
       if (typeof draft.utilization === 'number') setUtilization(draft.utilization);
       if (isOneOf(draft.acOutput, AC_OUTPUT_VALUES)) setAcOutput(draft.acOutput);
+      setCableInsulation(cableInsulationOf(draft.cableInsulation));
       if (isOneOf(draft.inverterBus, BUS_VALUES)) setInverterBus(draft.inverterBus);
       if (isOneOf(draft.busVoltage, BUS_VALUES)) setBusVoltage(draft.busVoltage);
       setBusTouched(Boolean(draft.busTouched));
@@ -178,6 +183,7 @@ export function LevantamentoScreen() {
           currentNeutralText,
           utilization,
           acOutput,
+          cableInsulation,
           inverterBus,
           busVoltage,
           busTouched,
@@ -205,6 +211,7 @@ export function LevantamentoScreen() {
     currentNeutralText,
     utilization,
     acOutput,
+    cableInsulation,
     inverterBus,
     busVoltage,
     busTouched,
@@ -229,6 +236,7 @@ export function LevantamentoScreen() {
         if (draft.monoVoltage === 127 || draft.monoVoltage === 220) setMonoVoltage(draft.monoVoltage);
         if (draft.triPair === '127_220' || draft.triPair === '220_380') setTriPair(draft.triPair);
         if (isOneOf(draft.acOutput, AC_OUTPUT_VALUES)) setAcOutput(draft.acOutput);
+        setCableInsulation(cableInsulationOf(draft.cableInsulation));
         if (isOneOf(draft.inverterBus, BUS_VALUES)) setInverterBus(draft.inverterBus);
         if (isOneOf(draft.busVoltage, BUS_VALUES)) setBusVoltage(draft.busVoltage);
         setBusTouched(Boolean(draft.busTouched));
@@ -272,6 +280,7 @@ export function LevantamentoScreen() {
       currentNeutral: parseNonNegative(currentNeutralText),
       utilizationFactor: utilization,
       acOutput,
+      cableInsulation,
       busVoltageV: busVoltage,
       autonomyHours,
       useDod,
@@ -292,6 +301,7 @@ export function LevantamentoScreen() {
     dodText,
     efficiencyText,
     acOutput,
+    cableInsulation,
     monoVoltage,
     supply,
     triPair,
@@ -358,6 +368,7 @@ export function LevantamentoScreen() {
         currentNeutralText,
         utilization,
         acOutput,
+        cableInsulation,
         inverterBus,
         busVoltage,
         busTouched,
@@ -441,6 +452,7 @@ export function LevantamentoScreen() {
     setCurrentNeutralText('');
     setUtilization(0.8);
     setAcOutput('mono220');
+    setCableInsulation('pvc70');
     setInverterBus(48);
     setBusVoltage(48);
     setBusTouched(false);
@@ -469,6 +481,7 @@ export function LevantamentoScreen() {
     setCurrentNeutralText(record.currentNeutralText);
     setUtilization(record.utilization);
     if (isOneOf(record.acOutput, AC_OUTPUT_VALUES)) setAcOutput(record.acOutput);
+    setCableInsulation(cableInsulationOf(record.cableInsulation));
     if (isOneOf(record.inverterBus, BUS_VALUES)) setInverterBus(record.inverterBus);
     if (isOneOf(record.busVoltage, BUS_VALUES)) setBusVoltage(record.busVoltage);
     setBusTouched(record.busTouched);
@@ -754,6 +767,8 @@ export function LevantamentoScreen() {
           body={FIELD_HELP.triphasic}
           onPress={() => setAcOutput('triphasic')}
         />
+        <FieldLabel label="Isolação do Cabo CA" tip="Método B1, eletroduto embutido ou aparente. A coluna de 3 condutores vale na saída trifásica; a de 2 condutores, na saída monofásica ou bifásica em 220 V." />
+        <InsulationDropdown value={cableInsulation} onChange={setCableInsulation} />
         <FieldLabel label="Fator de ocupação" tip={FIELD_HELP.utilization} />
         <Segment
           options={FU_STEPS.map((step) => ({
@@ -1216,6 +1231,57 @@ function Section({
   );
 }
 
+function InsulationDropdown({
+  value,
+  onChange,
+}: {
+  value: CableInsulation;
+  onChange: (value: CableInsulation) => void;
+}) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  const options: CableInsulation[] = ['pvc70', 'xlpe90'];
+  return (
+    <View style={styles.dropdown}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Isolação do Cabo CA"
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((current) => !current)}
+        style={[styles.dropdownButton, { backgroundColor: colors.inputBg, borderColor: colors.border }]}
+      >
+        <Text style={[styles.dropdownValue, { color: colors.text }]}>{CABLE_INSULATION_LABEL[value]}</Text>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
+      </Pressable>
+      {open ? (
+        <View style={[styles.dropdownMenu, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          {options.map((option) => {
+            const selected = option === value;
+            return (
+              <Pressable
+                key={option}
+                accessibilityRole="button"
+                accessibilityLabel={CABLE_INSULATION_LABEL[option]}
+                accessibilityState={{ selected }}
+                onPress={() => {
+                  onChange(option);
+                  setOpen(false);
+                }}
+                style={[
+                  styles.dropdownOption,
+                  { backgroundColor: selected ? colors.primarySoft : 'transparent' },
+                ]}
+              >
+                <Text style={[styles.dropdownValue, { color: colors.text }]}>{CABLE_INSULATION_LABEL[option]}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function Segment<T extends string>({
   options,
   value,
@@ -1332,6 +1398,36 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   pairItem: { flex: 1 },
+  dropdown: {
+    marginBottom: 14,
+  },
+  dropdownButton: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  dropdownMenu: {
+    borderWidth: 1,
+    borderRadius: 12,
+    marginTop: 6,
+    overflow: 'hidden',
+  },
+  dropdownOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  dropdownValue: {
+    fontFamily: 'DMSans_500Medium',
+    fontSize: 14,
+    lineHeight: 20,
+    flex: 1,
+  },
   segment: {
     flexDirection: 'row',
     borderWidth: 1,

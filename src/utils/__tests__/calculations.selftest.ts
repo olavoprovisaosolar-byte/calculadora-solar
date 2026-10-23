@@ -43,6 +43,7 @@ import {
 import {
   calculateOffGridLoad,
   lineCurrent220A,
+  NBR5410_B1,
   nextCommercialSize,
   recommendedAcBreakerA,
   recommendedConductorMm2,
@@ -567,6 +568,20 @@ assert(
 );
 assert(triUnbalanced.inverterSuggestedKw === 30, `Inversor do pico esperado 30 kW, veio ${triUnbalanced.inverterSuggestedKw}`);
 assert(triUnbalanced.conductorCount === 3, 'Saída trifásica pede 3 condutores');
+assert(triUnbalanced.cableInsulation === 'pvc70' && triUnbalanced.conductorMm2 === 25, 'PVC padrão fica em 25 mm²');
+const xlpe = calculateOffGridLoad({
+  ...offGridBase,
+  supply: 'triphasic',
+  acOutput: 'triphasic',
+  cableInsulation: 'xlpe90',
+});
+assert(xlpe.conductorMm2 === 16 && xlpe.conductorCount === 3, 'XLPE reduz a seção na saída trifásica');
+assert(xlpe.inverterSuggestedKw === triUnbalanced.inverterSuggestedKw, 'A isolação não altera a potência do inversor');
+const xlpeMono = calculateOffGridLoad({ ...offGridBase, cableInsulation: 'xlpe90' });
+assert(
+  xlpeMono.conductorCount === 2 && xlpeMono.conductorMm2 === 4 && xlpeMono.outputBreakerA === 32,
+  'XLPE com disjuntor de 32 A permanece em 4 mm²: 2,5 mm² conduz 30 A',
+);
 assert(
   triUnbalanced.conductorMm2 === recommendedConductorMm2(triUnbalanced.outputBreakerA, 3),
   'Bitola cobre o disjuntor trifásico',
@@ -697,6 +712,49 @@ assert(
   offGridReportFileName('  Casa  nº 12  ', '7/1/2026'),
 );
 assert(recommendedAcBreakerA(20.2) === 32, `Disjuntor de 20,2 A esperado 32 A, veio ${recommendedAcBreakerA(20.2)}`);
+assert(recommendedConductorMm2(32, 2, 'pvc70') === 4, 'PVC Tabela 36, 2 condutores, 32 A → 4 mm²');
+assert(recommendedConductorMm2(15.5, 2, 'pvc70') === 1.5, 'PVC 1,5 mm² conduz 15,5 A com 2 condutores');
+assert(recommendedConductorMm2(13.5, 3, 'pvc70') === 1.5, 'PVC 1,5 mm² conduz 13,5 A com 3 condutores');
+assert(recommendedConductorMm2(13.6, 3, 'pvc70') === 2.5, 'Acima de 13,5 A o PVC sobe para 2,5 mm²');
+assert(recommendedConductorMm2(70, 3, 'pvc70') === 25, 'PVC Tabela 36, 3 condutores, 70 A → 25 mm²');
+assert(recommendedConductorMm2(70, 3, 'xlpe90') === 16, 'XLPE Tabela 37, 3 condutores, 70 A → 16 mm²');
+assert(recommendedConductorMm2(30, 2, 'xlpe90') === 2.5, 'XLPE Tabela 37, 2 condutores, 30 A → 2,5 mm²');
+assert(recommendedConductorMm2(30, 2, 'pvc70') === 4, 'PVC Tabela 36, 2 condutores, 30 A → 4 mm²');
+assert(recommendedConductorMm2(300, 3, 'xlpe90') === 95, 'Acima da última linha o método B1 permanece em 95 mm²');
+assert(
+  JSON.stringify(NBR5410_B1.pvc70) ===
+    JSON.stringify([
+      { mm2: 1.5, three: 13.5, two: 15.5 },
+      { mm2: 2.5, three: 18, two: 24 },
+      { mm2: 4, three: 24, two: 32 },
+      { mm2: 6, three: 31, two: 41 },
+      { mm2: 10, three: 42, two: 57 },
+      { mm2: 16, three: 56, two: 76 },
+      { mm2: 25, three: 73, two: 101 },
+      { mm2: 35, three: 89, two: 125 },
+      { mm2: 50, three: 108, two: 151 },
+      { mm2: 70, three: 136, two: 192 },
+      { mm2: 95, three: 164, two: 232 },
+    ]),
+  'Tabela 36 PVC 70 °C, método B1',
+);
+assert(
+  JSON.stringify(NBR5410_B1.xlpe90) ===
+    JSON.stringify([
+      { mm2: 1.5, three: 17, two: 20 },
+      { mm2: 2.5, three: 23, two: 30 },
+      { mm2: 4, three: 31, two: 40 },
+      { mm2: 6, three: 40, two: 51 },
+      { mm2: 10, three: 54, two: 69 },
+      { mm2: 16, three: 73, two: 100 },
+      { mm2: 25, three: 95, two: 119 },
+      { mm2: 35, three: 117, two: 146 },
+      { mm2: 50, three: 141, two: 175 },
+      { mm2: 70, three: 179, two: 221 },
+      { mm2: 95, three: 216, two: 265 },
+    ]),
+  'Tabela 37 XLPE/HEPR 90 °C, método B1',
+);
 assert(
   describeArrangementGuide(offGrid).includes('16 ramos em paralelo com 1 módulo em série'),
   describeArrangementGuide(offGrid),
@@ -713,6 +771,8 @@ assert(report.includes('Bifásico'), 'Relatório cita o padrão da rede');
 assert(report.includes('80% de uso (20% de folga técnica)'), 'Relatório explica o fator de utilização');
 assert(report.includes('Inversor Monofásico 220V: 20,2 A'), 'Relatório repete a corrente da saída monofásica');
 assert(report.includes('4 mm²'), 'Relatório cita a bitola do condutor');
+assert(report.includes('PVC - 750V (70°C)'), 'Relatório cita a isolação padrão');
+assert(report.includes('método B1'), 'Relatório cita o método B1');
 assert(report.includes('Disjuntor CA Recomendado: 32 A'), 'Relatório recomenda o disjuntor');
 assert(report.includes('Arranjo:'), 'Relatório traz o guia de arranjo');
 assert(report.includes(FIELD_HELP.neutral), 'Relatório inclui a explicação do neutro');

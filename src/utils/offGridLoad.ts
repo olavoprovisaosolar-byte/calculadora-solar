@@ -42,46 +42,53 @@ export const AC_BREAKER_A = [6, 10, 16, 20, 25, 32, 40, 50, 63, 70, 80, 100, 125
 /** Fator de potência da saída em 220 V. Unitário até haver medição de FP. */
 export const OUTPUT_POWER_FACTOR = 1;
 
+/** Isolação do cabo de alimentação CA. O padrão é PVC 70 °C. */
+export type CableInsulation = 'pvc70' | 'xlpe90';
+
+export const CABLE_INSULATION_LABEL: Record<CableInsulation, string> = {
+  pvc70: 'PVC - 750V (70°C)',
+  xlpe90: 'XLPE / HEPR - 1 kV (90°C)',
+};
+
+type AmpacityRow = { mm2: number; two: number; three: number };
+
 /**
- * Ampacidade de cobre PVC 70 °C, método B1 (NBR 5410).
- * 2 condutores: monofásico ou bifásico em 220 V. 3 condutores: trifásico.
+ * Capacidade de condução de corrente, cobre, método B1 (eletroduto).
+ * Coluna `two`: 2 condutores carregados. Coluna `three`: 3 condutores carregados.
+ * PVC: ABNT NBR 5410 Tabela 36. XLPE/HEPR: Tabela 37.
  */
-export const COPPER_PVC_AMPACITY: Record<2 | 3, readonly { mm2: number; amps: number }[]> = {
-  2: [
-    { mm2: 1.5, amps: 17.5 },
-    { mm2: 2.5, amps: 24 },
-    { mm2: 4, amps: 32 },
-    { mm2: 6, amps: 41 },
-    { mm2: 10, amps: 57 },
-    { mm2: 16, amps: 76 },
-    { mm2: 25, amps: 101 },
-    { mm2: 35, amps: 125 },
-    { mm2: 50, amps: 151 },
-    { mm2: 70, amps: 192 },
-    { mm2: 95, amps: 232 },
-    { mm2: 120, amps: 269 },
-    { mm2: 150, amps: 309 },
-    { mm2: 185, amps: 353 },
-    { mm2: 240, amps: 415 },
+export const NBR5410_B1: Record<CableInsulation, readonly AmpacityRow[]> = {
+  pvc70: [
+    { mm2: 1.5, three: 13.5, two: 15.5 },
+    { mm2: 2.5, three: 18, two: 24 },
+    { mm2: 4, three: 24, two: 32 },
+    { mm2: 6, three: 31, two: 41 },
+    { mm2: 10, three: 42, two: 57 },
+    { mm2: 16, three: 56, two: 76 },
+    { mm2: 25, three: 73, two: 101 },
+    { mm2: 35, three: 89, two: 125 },
+    { mm2: 50, three: 108, two: 151 },
+    { mm2: 70, three: 136, two: 192 },
+    { mm2: 95, three: 164, two: 232 },
   ],
-  3: [
-    { mm2: 1.5, amps: 15.5 },
-    { mm2: 2.5, amps: 21 },
-    { mm2: 4, amps: 28 },
-    { mm2: 6, amps: 36 },
-    { mm2: 10, amps: 50 },
-    { mm2: 16, amps: 68 },
-    { mm2: 25, amps: 89 },
-    { mm2: 35, amps: 110 },
-    { mm2: 50, amps: 134 },
-    { mm2: 70, amps: 171 },
-    { mm2: 95, amps: 207 },
-    { mm2: 120, amps: 239 },
-    { mm2: 150, amps: 275 },
-    { mm2: 185, amps: 314 },
-    { mm2: 240, amps: 370 },
+  xlpe90: [
+    { mm2: 1.5, three: 17, two: 20 },
+    { mm2: 2.5, three: 23, two: 30 },
+    { mm2: 4, three: 31, two: 40 },
+    { mm2: 6, three: 40, two: 51 },
+    { mm2: 10, three: 54, two: 69 },
+    { mm2: 16, three: 73, two: 100 },
+    { mm2: 25, three: 95, two: 119 },
+    { mm2: 35, three: 117, two: 146 },
+    { mm2: 50, three: 141, two: 175 },
+    { mm2: 70, three: 179, two: 221 },
+    { mm2: 95, three: 216, two: 265 },
   ],
 };
+
+export function cableInsulationOf(value: unknown): CableInsulation {
+  return value === 'xlpe90' ? 'xlpe90' : 'pvc70';
+}
 
 /** Folga de 30% no trafo: P_trafo = P_127 / 0,70. */
 export const TRAFO_LOAD_FACTOR = 0.7;
@@ -201,6 +208,8 @@ export type OffGridLoadInput = {
   batteryModelId: BatteryModelId;
   /** Fração 0–1 (ex.: 0,92). */
   inverterEfficiency: number;
+  /** Isolação do cabo CA. Ausente significa PVC 70 °C. */
+  cableInsulation?: CableInsulation;
 };
 
 export type OffGridLoadResult = {
@@ -253,10 +262,11 @@ export type OffGridLoadResult = {
   powerFactor: number;
   /** Disjuntor da saída, acima de 125% da corrente nominal. */
   outputBreakerA: number;
-  /** Bitola de cobre PVC que suporta o disjuntor. */
+  /** Menor seção do método B1 cuja ampacidade cobre o disjuntor. */
   conductorMm2: number;
   /** 2 na saída 220 V monofásica/bifásica; 3 na saída trifásica. */
   conductorCount: 2 | 3;
+  cableInsulation: CableInsulation;
 };
 
 export function nextCommercialSize(value: number, steps: readonly number[]): number {
@@ -301,12 +311,20 @@ export function recommendedAcBreakerA(currentA: number): number {
   return nextCommercialSize(currentA * 1.25, AC_BREAKER_A);
 }
 
-/** Menor seção de cobre PVC cuja ampacidade cobre a corrente de projeto. */
-export function recommendedConductorMm2(designA: number, loadedConductors: 2 | 3): number {
+/**
+ * Menor seção do método B1 cuja ampacidade cobre a corrente de projeto.
+ * 3 condutores na saída trifásica; 2 condutores na saída 220 V mono/bifásica.
+ */
+export function recommendedConductorMm2(
+  designA: number,
+  loadedConductors: 2 | 3,
+  insulation: CableInsulation = 'pvc70',
+): number {
   if (!(designA > 0)) return 0;
-  const table = COPPER_PVC_AMPACITY[loadedConductors];
+  const table = NBR5410_B1[cableInsulationOf(insulation)];
+  const column = loadedConductors === 3 ? 'three' : 'two';
   for (const row of table) {
-    if (designA <= row.amps + 1e-9) return row.mm2;
+    if (designA <= row[column] + 1e-9) return row.mm2;
   }
   return table[table.length - 1].mm2;
 }
@@ -504,7 +522,8 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
   const inverterMinW = input.utilizationFactor > 0 ? demandW / input.utilizationFactor : 0;
   const outputBreakerA = recommendedAcBreakerA(currentInverterA);
   const conductorCount: 2 | 3 = triOutput ? 3 : 2;
-  const conductorMm2 = recommendedConductorMm2(outputBreakerA, conductorCount);
+  const cableInsulation = cableInsulationOf(input.cableInsulation);
+  const conductorMm2 = recommendedConductorMm2(outputBreakerA, conductorCount, cableInsulation);
   const inverterSuggestedKw = nextCommercialSize(inverterMinW / 1000, COMMERCIAL_INVERTER_KW);
 
   const hasNeutralSplit = input.supply === 'biphasic' || input.supply === 'triphasic';
@@ -583,5 +602,6 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
     outputBreakerA,
     conductorMm2,
     conductorCount,
+    cableInsulation,
   };
 }

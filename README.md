@@ -45,9 +45,9 @@ Scripts úteis:
 
 Link direto para baixar o APK gerado:
 
-**https://github.com/olavoprovisaosolar-byte/calculadora-solar/releases/download/v1.0.44/SolarCalculator-v1.0.44.apk**
+**https://github.com/olavoprovisaosolar-byte/calculadora-solar/releases/download/v1.0.45/SolarCalculator-v1.0.45.apk**
 
-Página do release: https://github.com/olavoprovisaosolar-byte/calculadora-solar/releases/tag/v1.0.44
+Página do release: https://github.com/olavoprovisaosolar-byte/calculadora-solar/releases/tag/v1.0.45
 
 > App independente **Solar Calculator** (`com.solarcalculator.app`). APK **release** com bundle JavaScript embutido (não precisa do Metro).
 

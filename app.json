@@ -2,7 +2,7 @@
   "expo": {
     "name": "Solar Calculator",
     "slug": "solar-calculator",
-    "version": "1.0.44",
+    "version": "1.0.45",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -20,7 +20,7 @@
     },
     "android": {
       "package": "com.solarcalculator.app",
-      "versionCode": 44,
+      "versionCode": 45,
       "allowBackup": true,
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {

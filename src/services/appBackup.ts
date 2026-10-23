@@ -42,6 +42,7 @@ export type OffGridDraft = {
   currentNeutralText: string;
   utilization: number;
   acOutput: string;
+  cableInsulation?: string;
   inverterBus: number;
   busVoltage: number;
   busTouched: boolean;

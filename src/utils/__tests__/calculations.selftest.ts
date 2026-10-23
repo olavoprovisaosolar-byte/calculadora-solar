@@ -34,19 +34,25 @@ import {
   buildOffGridReportHtml,
   describeArrangementGuide,
   describeLinePeak,
+  describeModularBus,
+  describeModularEquipment,
   describeOutputCurrent,
   describeTopologyComparison,
   FIELD_HELP,
+  MODULAR_INVERTER_ADVANTAGE,
+  NEUTRAL_NOT_MEASURED_NOTE,
   offGridReportFileName,
   type OffGridReportMeta,
 } from '../offGridReport';
 import {
   calculateOffGridLoad,
+  estimateNeutralCurrentA,
   lineCurrent220A,
   NBR5410_B1,
   nextCommercialSize,
   recommendedAcBreakerA,
   recommendedConductorMm2,
+  selectModularInverter,
   validateOffGridInput,
   type OffGridLoadInput,
 } from '../offGridLoad';
@@ -507,7 +513,9 @@ assert(
 );
 assert(offGrid.transformerStatus === 'required', 'Bifásico com saída 220 V monofásica exige autotransformador');
 assert(almostEqual(offGrid.inverterMinW, offGrid.powerTotalW / 0.8), 'Pinv = Ptotal / FU');
-assert(offGrid.inverterSuggestedKw === 8, `Inversor comercial esperado 8 kW, veio ${offGrid.inverterSuggestedKw}`);
+assert(offGrid.inverterSuggestedKw === 5.5, `Módulo monofásico esperado 5,5 kW, veio ${offGrid.inverterSuggestedKw}`);
+assert(offGrid.modularInverter.quantity === 1, '20 A com 20% de margem cabe em um HP5500');
+assert(!offGrid.neutralOmitted, 'Neutro medido não dispara a estimativa');
 assert(almostEqual(offGrid.transformerW, offGrid.power127W / 0.7), 'Trafo com 30% de folga');
 assert(offGrid.transformerSuggestedKva === 1.5, `Trafo comercial esperado 1,5 kVA, veio ${offGrid.transformerSuggestedKva}`);
 const energyWh = (offGrid.powerTotalW * 12) / 0.92;
@@ -566,7 +574,8 @@ assert(
   almostEqual(triUnbalanced.inverterMinW, (3 * vectorTri.I_Max * 127) / 0.8),
   'Pinv trifásico cobre 3 × Imax × Vfn',
 );
-assert(triUnbalanced.inverterSuggestedKw === 30, `Inversor do pico esperado 30 kW, veio ${triUnbalanced.inverterSuggestedKw}`);
+assert(triUnbalanced.inverterSuggestedKw === 24, `Dois módulos de 12 kW cobrem 40 A × 1,20, veio ${triUnbalanced.inverterSuggestedKw}`);
+assert(triUnbalanced.modularInverter.quantity === 2 && triUnbalanced.modularInverter.kind === 'triphasic', 'Saída trifásica usa módulos de 12 kW');
 assert(triUnbalanced.conductorCount === 3, 'Saída trifásica pede 3 condutores');
 assert(triUnbalanced.cableInsulation === 'pvc70' && triUnbalanced.conductorMm2 === 25, 'PVC padrão fica em 25 mm²');
 const xlpe = calculateOffGridLoad({
@@ -610,8 +619,74 @@ assert(tri380.voltageFn === 220 && tri380.voltageFf === 380, 'Trifásico 220/380
 assert(almostEqual(tri380.powerTotalW, (20 + 15 + 40) * 220), 'Ptotal no padrão 220/380 usa Vfn 220');
 assert(almostEqual(tri380.power127W, 8 * 220), 'Parcela do neutro no 220/380 é Ineutro × 220');
 const zeroNeutral = calculateOffGridLoad({ ...offGridBase, currentNeutral: 0 });
+assert(zeroNeutral.neutralOmitted, 'Neutro zerado conta como não medido');
+assert(almostEqual(zeroNeutral.modularInverter.criticalPhaseA, 20), 'Fase crítica é a maior corrente medida');
+assert(
+  almostEqual(estimateNeutralCurrentA(20, 15, 0, 'biphasic'), 5),
+  'Bifásico sem neutro estima a diferença das fases',
+);
+assert(almostEqual(zeroNeutral.power127W, 5 * 127), 'Parcela de 127 V usa o neutro estimado');
+assert(!zeroNeutral.concealUnmeasuredSplit, 'Desequilíbrio estimado não é apresentado como nulo');
 assert(zeroNeutral.transformerStatus === 'required', 'Card do trafo permanece obrigatório com neutro zerado');
-assert(zeroNeutral.transformerSuggestedKva === 0, 'Sem corrente de neutro o trafo calculado é 0 kVA');
+assert(zeroNeutral.transformerSuggestedKva === 1, `Trafo da estimativa esperado 1 kVA, veio ${zeroNeutral.transformerSuggestedKva}`);
+const balancedOmitted = calculateOffGridLoad({
+  ...offGridBase,
+  currentA: 20,
+  currentB: 20,
+  currentNeutral: 0,
+});
+assert(balancedOmitted.concealUnmeasuredSplit, 'Fases iguais e neutro ausente não publicam 0%');
+assert(balancedOmitted.power127W === 0, 'Estimativa equilibrada no bifásico não inventa parcela de 127 V');
+const omittedReport = buildOffGridReportHtml(
+  { ...offGridBase, currentA: 20, currentB: 20, currentNeutral: 0 },
+  balancedOmitted,
+  { clientName: 'João da Silva', location: 'Manaus/AM', surveyDate: '07/10/2026' },
+);
+assert(omittedReport.includes(NEUTRAL_NOT_MEASURED_NOTE), 'Relatório explica o neutro não medido');
+assert(!omittedReport.includes('>0%<') && !omittedReport.includes('>0%</'), 'Relatório não mostra a parcela de 127 V como 0%');
+assert(!omittedReport.includes('desequilíbrio nulo') && !omittedReport.includes('desequilíbrio é nulo'), 'Relatório não anula o desequilíbrio');
+assert(omittedReport.includes('Não medido'), 'Tabela marca o neutro como não medido');
+const critical78 = selectModularInverter('triphasic', 78, 10, 20);
+assert(almostEqual(critical78.designCurrentA, 93.6), 'I_projeto = 78 A × 1,20');
+assert(critical78.quantity === 3 && critical78.totalKw === 36, '78 A pedem 3 inversores trifásicos de 12 kW');
+const critical78Mono = selectModularInverter('mono220', 78, 40, 10);
+assert(critical78Mono.quantity === 4 && critical78Mono.totalKw === 22, '78 A pedem 4 inversores EPEVER de 5,5 kW');
+const shown78 = calculateOffGridLoad({
+  ...offGridBase,
+  supply: 'triphasic',
+  acOutput: 'triphasic',
+  currentA: 78,
+  currentB: 10,
+  currentC: 20,
+  currentNeutral: 5,
+});
+assert(
+  describeModularEquipment(shown78) ===
+    '3x Inversores Off-Grid Trifásicos 12 kW em Paralelo (Potência Total: 36 kW)',
+  describeModularEquipment(shown78),
+);
+assert(
+  describeModularBus(shown78) ===
+    '94,5 A por fase (Atende com folga a fase crítica de 78 A + 20% de margem = 93,6 A)',
+  describeModularBus(shown78),
+);
+assert(MODULAR_INVERTER_ADVANTAGE.startsWith('Redundância operacional'), 'Vantagem técnica dos módulos em paralelo');
+const shown78Mono = calculateOffGridLoad({
+  ...offGridBase,
+  acOutput: 'mono220',
+  currentA: 78,
+  currentB: 40,
+  currentNeutral: 8,
+});
+assert(
+  describeModularEquipment(shown78Mono) ===
+    '4x Inversores Off-Grid Monofásicos EPEVER HP5500 5,5 kW em Paralelo (Potência Total: 22 kW)',
+  describeModularEquipment(shown78Mono),
+);
+assert(
+  describeModularBus(shown78Mono) === '100 A em 220V (Atende com folga a fase crítica de 78 A + 20% de margem = 93,6 A)',
+  describeModularBus(shown78Mono),
+);
 const mono127 = calculateOffGridLoad({
   ...offGridBase,
   supply: 'mono',
@@ -760,7 +835,15 @@ assert(
   describeArrangementGuide(offGrid),
 );
 const report = buildOffGridReportHtml(offGridBase, offGrid, reportMeta);
-assert(report.includes('INVERSOR OFF-GRID 8 kW'), 'Relatório destaca o inversor');
+assert(
+  report.includes('1x Inversores Off-Grid Monofásicos EPEVER HP5500 5,5 kW em Paralelo (Potência Total: 5,5 kW)'),
+  'Relatório destaca o módulo monofásico',
+);
+assert(report.includes(MODULAR_INVERTER_ADVANTAGE), 'Relatório cita a vantagem da expansão modular');
+assert(
+  report.includes('25 A em 220V (Atende com folga a fase crítica de 20 A + 20% de margem = 24 A)'),
+  'Relatório mostra a capacidade do barramento',
+);
 assert(report.includes('BANCO DE BATERIAS: 16x Módulos de Lítio 48V 100Ah'), 'Relatório destaca o banco');
 assert(report.includes('EQUIPAMENTO PRINCIPAL SELECIONADO'), 'Badge do inversor');
 assert(report.includes('ARMAZENAMENTO DE ENERGIA (BACKUP)'), 'Badge das baterias');

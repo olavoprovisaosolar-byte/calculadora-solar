@@ -14,6 +14,10 @@ type Props = {
   power220Kw: number;
   lowLabel?: string;
   highLabel?: string;
+  /** Neutro não medido e a estimativa de 127 V fecha em zero: não mostrar 0% nem 100%. */
+  hidePercents?: boolean;
+  /** Parcela estimada a partir das correntes de linha. */
+  estimated?: boolean;
 };
 
 /** Rosca da parcela fase-neutro (amarelo) × fase-fase (azul). */
@@ -24,6 +28,8 @@ export function LoadShareChart({
   power220Kw,
   lowLabel = '127 V',
   highLabel = '220 V',
+  hidePercents = false,
+  estimated = false,
 }: Props) {
   const { colors } = useTheme();
   const size = 168;
@@ -65,14 +71,32 @@ export function LoadShareChart({
         </Svg>
         <View style={styles.center} pointerEvents="none">
           <Text style={[styles.centerValue, { color: colors.text }]}>
-            {formatNumber(centerFraction * 100, 0)}%
+            {hidePercents ? '—' : `${formatNumber(centerFraction * 100, 0)}%`}
           </Text>
-          <Text style={[styles.centerLabel, { color: colors.textMuted }]}>{centerLabel}</Text>
+          <Text style={[styles.centerLabel, { color: colors.textMuted }]}>
+            {hidePercents ? 'Neutro não medido' : centerLabel}
+          </Text>
         </View>
       </View>
       <View style={styles.legend}>
-        <LegendDot color={YELLOW_127} label={`Carga ${lowLabel}`} value={`${formatNumber(power127Kw)} kW · ${formatNumber(share127 * 100, 0)}%`} />
-        <LegendDot color={BLUE_220} label={`Carga ${highLabel}`} value={`${formatNumber(power220Kw)} kW · ${formatNumber(share220 * 100, 0)}%`} />
+        <LegendDot
+          color={YELLOW_127}
+          label={`Carga ${lowLabel}`}
+          value={
+            hidePercents
+              ? 'não medida em campo'
+              : `${formatNumber(power127Kw)} kW · ${formatNumber(share127 * 100, 0)}%${estimated ? ' (estimado)' : ''}`
+          }
+        />
+        <LegendDot
+          color={BLUE_220}
+          label={`Carga ${highLabel}`}
+          value={
+            hidePercents
+              ? 'não medida em campo'
+              : `${formatNumber(power220Kw)} kW · ${formatNumber(share220 * 100, 0)}%${estimated ? ' (estimado)' : ''}`
+          }
+        />
       </View>
     </View>
   );

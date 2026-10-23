@@ -34,13 +34,16 @@ import {
   validateOffGridInput,
 } from '../utils/offGridLoad';
 import {
-  acOutputTag,
   buildOffGridReportHtml,
   describeAssembly,
   describeLinePeak,
+  describeModularBus,
+  describeModularEquipment,
   describeOutputCurrent,
   describeOutputProtection,
   describeTopologyComparison,
+  MODULAR_INVERTER_ADVANTAGE,
+  NEUTRAL_NOT_MEASURED_NOTE,
   describeTransformer,
   dodConsideredLabel,
   FIELD_HELP,
@@ -932,16 +935,27 @@ export function LevantamentoScreen() {
               power220Kw={result.power220W / 1000}
               lowLabel={loadSplitLabels(draft).low}
               highLabel={loadSplitLabels(draft).high}
+              hidePercents={result.concealUnmeasuredSplit}
+              estimated={result.neutralOmitted && !result.concealUnmeasuredSplit}
             />
             <Metric label="Potência total medida" value={`${formatNumber(result.powerTotalW / 1000)} kW`} emphasize />
             <Metric
               label={`Carga ${loadSplitLabels(draft).low}`}
-              value={`${formatNumber(result.power127W / 1000)} kW · ${formatNumber(result.share127 * 100, 0)}%`}
+              value={
+                result.concealUnmeasuredSplit
+                  ? 'não medida em campo'
+                  : `${formatNumber(result.power127W / 1000)} kW · ${formatNumber(result.share127 * 100, 0)}%${result.neutralOmitted ? ' (estimado)' : ''}`
+              }
             />
             <Metric
               label={`Carga ${loadSplitLabels(draft).high}`}
-              value={`${formatNumber(result.power220W / 1000)} kW · ${formatNumber(result.share220 * 100, 0)}%`}
+              value={
+                result.concealUnmeasuredSplit
+                  ? 'não medida em campo'
+                  : `${formatNumber(result.power220W / 1000)} kW · ${formatNumber(result.share220 * 100, 0)}%${result.neutralOmitted ? ' (estimado)' : ''}`
+              }
             />
+            {result.neutralOmitted ? <Banner tone="info" text={NEUTRAL_NOT_MEASURED_NOTE} /> : null}
             <Text style={[styles.outputCurrent, { color: colors.text, borderTopColor: colors.border }]}>
               {describeOutputCurrent(draft, result)}
             </Text>
@@ -965,28 +979,17 @@ export function LevantamentoScreen() {
               { backgroundColor: colors.surface, borderColor: colors.border, shadowColor: colors.shadow },
             ]}
           >
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Inversor recomendado</Text>
-            <Text style={[styles.headline, { color: colors.accent }]}>
-              {acOutputTag(acOutput)}: {formatNumber(result.inverterSuggestedKw)} kW
-            </Text>
-            <Metric
-              label="Potência mínima calculada"
-              value={`${formatNumber(result.inverterMinW / 1000)} kW`}
-            />
-            <Metric
-              label="Fator de ocupação aplicado"
-              value={`${formatNumber(result.utilizationFactor * 100, 0)}%`}
-            />
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Equipamento Principal Selecionado</Text>
+            <Text style={[styles.fieldCaption, { color: colors.textSecondary, marginTop: 10 }]}>Equipamento</Text>
+            <Text style={[styles.alertDetail, { color: colors.accent }]}>{describeModularEquipment(result)}</Text>
+            <Text style={[styles.fieldCaption, { color: colors.textSecondary, marginTop: 10 }]}>Capacidade do Barramento</Text>
+            <Text style={[styles.wiring, { color: colors.text }]}>{describeModularBus(result)}</Text>
+            <Text style={[styles.fieldCaption, { color: colors.textSecondary, marginTop: 10 }]}>Vantagem Técnica</Text>
+            <Text style={[styles.wiring, { color: colors.text }]}>{MODULAR_INVERTER_ADVANTAGE}</Text>
             <Text style={[styles.fieldCaption, { color: colors.textSecondary }]}>
               {describeOutputProtection(result)}
             </Text>
           </View>
-          {result.sizedByLinePeak ? (
-            <Banner
-              tone="warning"
-              text="Inversor trifásico pela fase mais carregada. I_R, I_S e I_T usam a soma vetorial, e a potência mínima cobre 3 × Imax × tensão fase-neutro."
-            />
-          ) : null}
           <Banner
             tone={result.surgeMarginTight ? 'warning' : 'info'}
             text={

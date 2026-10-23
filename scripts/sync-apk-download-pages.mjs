@@ -11,7 +11,7 @@ if (!/^\d+\.\d+\.\d+$/.test(version)) {
 }
 
 const apkName = `SolarCalculator-v${version}.apk`;
-const tag = `solar-calculator-v${version}`;
+const tag = `v${version}`;
 const REPO = 'olavoprovisaosolar-byte/calculadora-solar';
 const downloadUrl = `https://github.com/${REPO}/releases/download/${tag}/${apkName}`;
 const releaseUrl = `https://github.com/${REPO}/releases/tag/${tag}`;
@@ -19,11 +19,11 @@ const releaseUrl = `https://github.com/${REPO}/releases/tag/${tag}`;
 function replaceDownloadLinks(source) {
   return source
     .replace(
-      /https:\/\/github\.com\/olavoprovisaosolar-byte\/(?:chuveiro-inteligente|calculadora-solar)\/releases\/download\/solar-calculator-v[\d.]+\/SolarCalculator(?:-v[\d.]+)?\.apk/g,
+      /https:\/\/github\.com\/olavoprovisaosolar-byte\/calculadora-solar\/releases\/download\/(?:solar-calculator-v|v)[\d.]+\/SolarCalculator(?:-v[\d.]+)?\.apk/g,
       downloadUrl,
     )
     .replace(
-      /https:\/\/github\.com\/olavoprovisaosolar-byte\/(?:chuveiro-inteligente|calculadora-solar)\/releases\/tag\/solar-calculator-v[\d.]+/g,
+      /https:\/\/github\.com\/olavoprovisaosolar-byte\/calculadora-solar\/releases\/tag\/(?:solar-calculator-v|v)[\d.]+/g,
       releaseUrl,
     )
     .replace(/Baixar SolarCalculator(?:-v[\d.]+)?\.apk/g, `Baixar ${apkName}`);

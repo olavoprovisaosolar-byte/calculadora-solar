@@ -33,18 +33,30 @@ import { PRESET_MODULES } from '../../constants/modules';
 import {
   buildOffGridReportHtml,
   describeArrangementGuide,
+  describeLinePeak,
+  describeModularBus,
+  describeModularEquipment,
   describeOutputCurrent,
+  describeTopologyComparison,
   FIELD_HELP,
+  MODULAR_INVERTER_ADVANTAGE,
+  NEUTRAL_NOT_MEASURED_NOTE,
   offGridReportFileName,
   type OffGridReportMeta,
 } from '../offGridReport';
 import {
   calculateOffGridLoad,
+  estimateNeutralCurrentA,
+  lineCurrent220A,
+  NBR5410_B1,
   nextCommercialSize,
   recommendedAcBreakerA,
+  recommendedConductorMm2,
+  selectModularInverter,
   validateOffGridInput,
   type OffGridLoadInput,
 } from '../offGridLoad';
+import { calcularCorrentesLinhaTrifasico } from '../threePhaseCurrents';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -405,7 +417,8 @@ assert(removeSurvey([...clients, ...joao], 'joao-1').length === 1, 'Excluir tira
 assert(apkFileName('1.0.42') === 'SolarCalculator-v1.0.42.apk', 'Nome do APK inclui a versão');
 assert(apkFileName('1.0.43') === 'SolarCalculator-v1.0.43.apk', 'Nome do APK acompanha a versão nova');
 assert(apkFileName('v1.0.43') === 'SolarCalculator-v1.0.43.apk', 'Nome do APK ignora o prefixo v');
-assert(apkReleaseTag('1.0.43') === 'solar-calculator-v1.0.43', 'Tag de release segue a versão');
+assert(apkFileName('1.0.44') === 'SolarCalculator-v1.0.44.apk', 'APK 1.0.44 leva a versão no nome');
+assert(apkReleaseTag('1.0.44') === 'v1.0.44', 'Tag de release é v1.0.44');
 {
   const pkg = JSON.parse(
     readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../package.json'), 'utf8'),
@@ -491,14 +504,18 @@ assert(almostEqual(offGrid.power127W, 8 * 127), 'P127 = Ineutro × Vfn');
 assert(almostEqual(offGrid.powerTotalW, (20 + 15) * 127), 'Ptotal bifásico ignora fase C');
 assert(almostEqual(offGrid.power220W, offGrid.powerTotalW - offGrid.power127W), 'P220 = Ptotal − P127');
 assert(offGrid.voltageFn === 127 && offGrid.voltageFf === 220, 'Bifásico trava 127/220 V');
-assert(almostEqual(offGrid.currentInverterA, offGrid.powerTotalW / 220), 'Saída 220 V monofásica: I = Ptotal / 220');
+assert(almostEqual(offGrid.currentInverterA, lineCurrent220A(offGrid.powerTotalW)), 'Saída 220 V: I = Ptotal / (220 × FP)');
+assert(offGrid.powerFactor === 1, 'FP unitário na saída 220 V');
+assert(offGrid.outputBreakerA === 32 && offGrid.conductorMm2 === 4 && offGrid.conductorCount === 2, 'Monofásico 220 V: disjuntor 32 A e cabo 4 mm²');
 assert(
-  describeOutputCurrent(offGridBase, offGrid) === 'Corrente Nominal de Saída: 20,2 A (Monofásico 220V)',
+  describeOutputCurrent(offGridBase, offGrid) === 'Inversor Monofásico 220V: 20,2 A (Ptotal / (220 × FP))',
   describeOutputCurrent(offGridBase, offGrid),
 );
 assert(offGrid.transformerStatus === 'required', 'Bifásico com saída 220 V monofásica exige autotransformador');
 assert(almostEqual(offGrid.inverterMinW, offGrid.powerTotalW / 0.8), 'Pinv = Ptotal / FU');
-assert(offGrid.inverterSuggestedKw === 8, `Inversor comercial esperado 8 kW, veio ${offGrid.inverterSuggestedKw}`);
+assert(offGrid.inverterSuggestedKw === 5.5, `Módulo monofásico esperado 5,5 kW, veio ${offGrid.inverterSuggestedKw}`);
+assert(offGrid.modularInverter.quantity === 1, '20 A com 20% de margem cabe em um HP5500');
+assert(!offGrid.neutralOmitted, 'Neutro medido não dispara a estimativa');
 assert(almostEqual(offGrid.transformerW, offGrid.power127W / 0.7), 'Trafo com 30% de folga');
 assert(offGrid.transformerSuggestedKva === 1.5, `Trafo comercial esperado 1,5 kVA, veio ${offGrid.transformerSuggestedKva}`);
 const energyWh = (offGrid.powerTotalW * 12) / 0.92;
@@ -525,16 +542,151 @@ const noDod = calculateOffGridLoad({ ...offGridBase, useDod: false });
 assert(almostEqual(noDod.batteryGrossWh, energyWh, 0.02), 'Sem DoD a capacidade bruta é a energia útil');
 assert(noDod.dodApplied === null, 'DoD ignorado');
 
+const balancedVector = calcularCorrentesLinhaTrifasico({ I_RS: 10, I_ST: 10, I_TR: 10 });
+assert(balancedVector.I_R === 17.32 && balancedVector.I_S === 17.32 && balancedVector.I_T === 17.32, 'Ramos iguais: linha = √3 × ramo');
+assert(balancedVector.I_Max === 17.32, 'Imax dos ramos iguais');
+const asymmetric = calcularCorrentesLinhaTrifasico({ I_RS: 0, I_ST: 10, I_TR: 4 });
+assert(asymmetric.I_R === 4, 'Fase R só enxerga o ramo TR');
+assert(asymmetric.I_S === 10, 'Fase S só enxerga o ramo ST');
+assert(asymmetric.I_T === 12.49, `Fase T usa I_ST×I_TR, veio ${asymmetric.I_T}`);
+assert(asymmetric.I_Max === 12.49, 'Imax é a maior linha');
+const singleBranch = calcularCorrentesLinhaTrifasico({ I_RS: 10, I_ST: 0, I_TR: 0 });
+assert(singleBranch.I_R === 10 && singleBranch.I_S === 10 && singleBranch.I_T === 0, 'Um ramo entre R e S carrega só essas fases');
+assert(calcularCorrentesLinhaTrifasico({ I_RS: -3, I_ST: Number.NaN, I_TR: 0 }).I_Max === 0, 'Corrente inválida não entra na soma');
+
 const tri = calculateOffGridLoad({ ...offGridBase, supply: 'triphasic' });
 assert(almostEqual(tri.powerTotalW, (20 + 15 + 40) * 127), 'Ptotal trifásico soma fase C');
+assert(tri.measuredLine.I_R === 20 && tri.measuredLine.I_S === 15 && tri.measuredLine.I_T === 40, 'Alicate trifásico guarda R, S e T');
+assert(tri.measuredLine.I_Max === 40, 'Imax medido é a fase mais carregada');
+const vectorTri = calcularCorrentesLinhaTrifasico({ I_RS: 20, I_ST: 15, I_TR: 40 });
+assert(
+  tri.phasePhaseVector.I_R === vectorTri.I_R && tri.phasePhaseVector.I_Max === vectorTri.I_Max,
+  'Saída trifásica usa a soma vetorial das fases medidas',
+);
+assert(!tri.sizedByLinePeak, 'Saída monofásica não infla o inversor pelo Imax');
+assert(describeTopologyComparison(tri).includes('Monofásico 220 V'), describeTopologyComparison(tri));
+assert(describeLinePeak(tri).includes('Imax medido 40'), describeLinePeak(tri));
+
+const triUnbalanced = calculateOffGridLoad({ ...offGridBase, supply: 'triphasic', acOutput: 'triphasic' });
+assert(almostEqual(triUnbalanced.currentInverterA, vectorTri.I_Max), 'Saída trifásica usa o Imax vetorial');
+assert(triUnbalanced.sizedByLinePeak, 'Desbalanceamento eleva o inversor trifásico');
+assert(
+  almostEqual(triUnbalanced.inverterMinW, (3 * vectorTri.I_Max * 127) / 0.8),
+  'Pinv trifásico cobre 3 × Imax × Vfn',
+);
+assert(triUnbalanced.inverterSuggestedKw === 24, `Dois módulos de 12 kW cobrem 40 A × 1,20, veio ${triUnbalanced.inverterSuggestedKw}`);
+assert(triUnbalanced.modularInverter.quantity === 2 && triUnbalanced.modularInverter.kind === 'triphasic', 'Saída trifásica usa módulos de 12 kW');
+assert(triUnbalanced.conductorCount === 3, 'Saída trifásica pede 3 condutores');
+assert(triUnbalanced.cableInsulation === 'pvc70' && triUnbalanced.conductorMm2 === 25, 'PVC padrão fica em 25 mm²');
+const xlpe = calculateOffGridLoad({
+  ...offGridBase,
+  supply: 'triphasic',
+  acOutput: 'triphasic',
+  cableInsulation: 'xlpe90',
+});
+assert(xlpe.conductorMm2 === 16 && xlpe.conductorCount === 3, 'XLPE reduz a seção na saída trifásica');
+assert(xlpe.inverterSuggestedKw === triUnbalanced.inverterSuggestedKw, 'A isolação não altera a potência do inversor');
+const xlpeMono = calculateOffGridLoad({ ...offGridBase, cableInsulation: 'xlpe90' });
+assert(
+  xlpeMono.conductorCount === 2 && xlpeMono.conductorMm2 === 4 && xlpeMono.outputBreakerA === 32,
+  'XLPE com disjuntor de 32 A permanece em 4 mm²: 2,5 mm² conduz 30 A',
+);
+assert(
+  triUnbalanced.conductorMm2 === recommendedConductorMm2(triUnbalanced.outputBreakerA, 3),
+  'Bitola cobre o disjuntor trifásico',
+);
+assert(
+  almostEqual(triUnbalanced.energyWh, triUnbalanced.powerTotalW * 12 / 0.92, 0.05),
+  'A energia do banco continua na potência real',
+);
+const triBalanced = calculateOffGridLoad({
+  ...offGridBase,
+  supply: 'triphasic',
+  acOutput: 'triphasic',
+  currentA: 10,
+  currentB: 10,
+  currentC: 10,
+  currentNeutral: 0,
+});
+assert(triBalanced.sizedByLinePeak, 'Ramos iguais ainda geram linha √3 vezes maior');
+assert(
+  almostEqual(triBalanced.currentInverterA, calcularCorrentesLinhaTrifasico({ I_RS: 10, I_ST: 10, I_TR: 10 }).I_Max),
+  'Trifásico equilibrado: Imax é a linha vetorial',
+);
 assert(tri.transformerStatus === 'required', 'Trifásico com saída 220 V monofásica exige autotransformador');
 const tri380 = calculateOffGridLoad({ ...offGridBase, supply: 'triphasic', triPair: '220_380' });
 assert(tri380.voltageFn === 220 && tri380.voltageFf === 380, 'Trifásico 220/380 usa essas tensões');
 assert(almostEqual(tri380.powerTotalW, (20 + 15 + 40) * 220), 'Ptotal no padrão 220/380 usa Vfn 220');
 assert(almostEqual(tri380.power127W, 8 * 220), 'Parcela do neutro no 220/380 é Ineutro × 220');
 const zeroNeutral = calculateOffGridLoad({ ...offGridBase, currentNeutral: 0 });
+assert(zeroNeutral.neutralOmitted, 'Neutro zerado conta como não medido');
+assert(almostEqual(zeroNeutral.modularInverter.criticalPhaseA, 20), 'Fase crítica é a maior corrente medida');
+assert(
+  almostEqual(estimateNeutralCurrentA(20, 15, 0, 'biphasic'), 5),
+  'Bifásico sem neutro estima a diferença das fases',
+);
+assert(almostEqual(zeroNeutral.power127W, 5 * 127), 'Parcela de 127 V usa o neutro estimado');
+assert(!zeroNeutral.concealUnmeasuredSplit, 'Desequilíbrio estimado não é apresentado como nulo');
 assert(zeroNeutral.transformerStatus === 'required', 'Card do trafo permanece obrigatório com neutro zerado');
-assert(zeroNeutral.transformerSuggestedKva === 0, 'Sem corrente de neutro o trafo calculado é 0 kVA');
+assert(zeroNeutral.transformerSuggestedKva === 1, `Trafo da estimativa esperado 1 kVA, veio ${zeroNeutral.transformerSuggestedKva}`);
+const balancedOmitted = calculateOffGridLoad({
+  ...offGridBase,
+  currentA: 20,
+  currentB: 20,
+  currentNeutral: 0,
+});
+assert(balancedOmitted.concealUnmeasuredSplit, 'Fases iguais e neutro ausente não publicam 0%');
+assert(balancedOmitted.power127W === 0, 'Estimativa equilibrada no bifásico não inventa parcela de 127 V');
+const omittedReport = buildOffGridReportHtml(
+  { ...offGridBase, currentA: 20, currentB: 20, currentNeutral: 0 },
+  balancedOmitted,
+  { clientName: 'João da Silva', location: 'Manaus/AM', surveyDate: '07/10/2026' },
+);
+assert(omittedReport.includes(NEUTRAL_NOT_MEASURED_NOTE), 'Relatório explica o neutro não medido');
+assert(!omittedReport.includes('>0%<') && !omittedReport.includes('>0%</'), 'Relatório não mostra a parcela de 127 V como 0%');
+assert(!omittedReport.includes('desequilíbrio nulo') && !omittedReport.includes('desequilíbrio é nulo'), 'Relatório não anula o desequilíbrio');
+assert(omittedReport.includes('Não medido'), 'Tabela marca o neutro como não medido');
+const critical78 = selectModularInverter('triphasic', 78, 10, 20);
+assert(almostEqual(critical78.designCurrentA, 93.6), 'I_projeto = 78 A × 1,20');
+assert(critical78.quantity === 3 && critical78.totalKw === 36, '78 A pedem 3 inversores trifásicos de 12 kW');
+const critical78Mono = selectModularInverter('mono220', 78, 40, 10);
+assert(critical78Mono.quantity === 4 && critical78Mono.totalKw === 22, '78 A pedem 4 inversores EPEVER de 5,5 kW');
+const shown78 = calculateOffGridLoad({
+  ...offGridBase,
+  supply: 'triphasic',
+  acOutput: 'triphasic',
+  currentA: 78,
+  currentB: 10,
+  currentC: 20,
+  currentNeutral: 5,
+});
+assert(
+  describeModularEquipment(shown78) ===
+    '3x Inversores Off-Grid Trifásicos 12 kW em Paralelo (Potência Total: 36 kW)',
+  describeModularEquipment(shown78),
+);
+assert(
+  describeModularBus(shown78) ===
+    '94,5 A por fase (Atende com folga a fase crítica de 78 A + 20% de margem = 93,6 A)',
+  describeModularBus(shown78),
+);
+assert(MODULAR_INVERTER_ADVANTAGE.startsWith('Redundância operacional'), 'Vantagem técnica dos módulos em paralelo');
+const shown78Mono = calculateOffGridLoad({
+  ...offGridBase,
+  acOutput: 'mono220',
+  currentA: 78,
+  currentB: 40,
+  currentNeutral: 8,
+});
+assert(
+  describeModularEquipment(shown78Mono) ===
+    '4x Inversores Off-Grid Monofásicos EPEVER HP5500 5,5 kW em Paralelo (Potência Total: 22 kW)',
+  describeModularEquipment(shown78Mono),
+);
+assert(
+  describeModularBus(shown78Mono) === '100 A em 220V (Atende com folga a fase crítica de 78 A + 20% de margem = 93,6 A)',
+  describeModularBus(shown78Mono),
+);
 const mono127 = calculateOffGridLoad({
   ...offGridBase,
   supply: 'mono',
@@ -635,12 +787,63 @@ assert(
   offGridReportFileName('  Casa  nº 12  ', '7/1/2026'),
 );
 assert(recommendedAcBreakerA(20.2) === 32, `Disjuntor de 20,2 A esperado 32 A, veio ${recommendedAcBreakerA(20.2)}`);
+assert(recommendedConductorMm2(32, 2, 'pvc70') === 4, 'PVC Tabela 36, 2 condutores, 32 A → 4 mm²');
+assert(recommendedConductorMm2(15.5, 2, 'pvc70') === 1.5, 'PVC 1,5 mm² conduz 15,5 A com 2 condutores');
+assert(recommendedConductorMm2(13.5, 3, 'pvc70') === 1.5, 'PVC 1,5 mm² conduz 13,5 A com 3 condutores');
+assert(recommendedConductorMm2(13.6, 3, 'pvc70') === 2.5, 'Acima de 13,5 A o PVC sobe para 2,5 mm²');
+assert(recommendedConductorMm2(70, 3, 'pvc70') === 25, 'PVC Tabela 36, 3 condutores, 70 A → 25 mm²');
+assert(recommendedConductorMm2(70, 3, 'xlpe90') === 16, 'XLPE Tabela 37, 3 condutores, 70 A → 16 mm²');
+assert(recommendedConductorMm2(30, 2, 'xlpe90') === 2.5, 'XLPE Tabela 37, 2 condutores, 30 A → 2,5 mm²');
+assert(recommendedConductorMm2(30, 2, 'pvc70') === 4, 'PVC Tabela 36, 2 condutores, 30 A → 4 mm²');
+assert(recommendedConductorMm2(300, 3, 'xlpe90') === 95, 'Acima da última linha o método B1 permanece em 95 mm²');
+assert(
+  JSON.stringify(NBR5410_B1.pvc70) ===
+    JSON.stringify([
+      { mm2: 1.5, three: 13.5, two: 15.5 },
+      { mm2: 2.5, three: 18, two: 24 },
+      { mm2: 4, three: 24, two: 32 },
+      { mm2: 6, three: 31, two: 41 },
+      { mm2: 10, three: 42, two: 57 },
+      { mm2: 16, three: 56, two: 76 },
+      { mm2: 25, three: 73, two: 101 },
+      { mm2: 35, three: 89, two: 125 },
+      { mm2: 50, three: 108, two: 151 },
+      { mm2: 70, three: 136, two: 192 },
+      { mm2: 95, three: 164, two: 232 },
+    ]),
+  'Tabela 36 PVC 70 °C, método B1',
+);
+assert(
+  JSON.stringify(NBR5410_B1.xlpe90) ===
+    JSON.stringify([
+      { mm2: 1.5, three: 17, two: 20 },
+      { mm2: 2.5, three: 23, two: 30 },
+      { mm2: 4, three: 31, two: 40 },
+      { mm2: 6, three: 40, two: 51 },
+      { mm2: 10, three: 54, two: 69 },
+      { mm2: 16, three: 73, two: 100 },
+      { mm2: 25, three: 95, two: 119 },
+      { mm2: 35, three: 117, two: 146 },
+      { mm2: 50, three: 141, two: 175 },
+      { mm2: 70, three: 179, two: 221 },
+      { mm2: 95, three: 216, two: 265 },
+    ]),
+  'Tabela 37 XLPE/HEPR 90 °C, método B1',
+);
 assert(
   describeArrangementGuide(offGrid).includes('16 ramos em paralelo com 1 módulo em série'),
   describeArrangementGuide(offGrid),
 );
 const report = buildOffGridReportHtml(offGridBase, offGrid, reportMeta);
-assert(report.includes('INVERSOR OFF-GRID 8 kW'), 'Relatório destaca o inversor');
+assert(
+  report.includes('1x Inversores Off-Grid Monofásicos EPEVER HP5500 5,5 kW em Paralelo (Potência Total: 5,5 kW)'),
+  'Relatório destaca o módulo monofásico',
+);
+assert(report.includes(MODULAR_INVERTER_ADVANTAGE), 'Relatório cita a vantagem da expansão modular');
+assert(
+  report.includes('25 A em 220V (Atende com folga a fase crítica de 20 A + 20% de margem = 24 A)'),
+  'Relatório mostra a capacidade do barramento',
+);
 assert(report.includes('BANCO DE BATERIAS: 16x Módulos de Lítio 48V 100Ah'), 'Relatório destaca o banco');
 assert(report.includes('EQUIPAMENTO PRINCIPAL SELECIONADO'), 'Badge do inversor');
 assert(report.includes('ARMAZENAMENTO DE ENERGIA (BACKUP)'), 'Badge das baterias');
@@ -649,7 +852,10 @@ assert(report.includes('Manaus/AM'), 'Relatório cita a localidade');
 assert(report.includes('07/10/2026'), 'Relatório cita a data');
 assert(report.includes('Bifásico'), 'Relatório cita o padrão da rede');
 assert(report.includes('80% de uso (20% de folga técnica)'), 'Relatório explica o fator de utilização');
-assert(report.includes('20,2 A (Monofásico 220V)'), 'Relatório repete a corrente da saída monofásica');
+assert(report.includes('Inversor Monofásico 220V: 20,2 A'), 'Relatório repete a corrente da saída monofásica');
+assert(report.includes('4 mm²'), 'Relatório cita a bitola do condutor');
+assert(report.includes('PVC - 750V (70°C)'), 'Relatório cita a isolação padrão');
+assert(report.includes('método B1'), 'Relatório cita o método B1');
 assert(report.includes('Disjuntor CA Recomendado: 32 A'), 'Relatório recomenda o disjuntor');
 assert(report.includes('Arranjo:'), 'Relatório traz o guia de arranjo');
 assert(report.includes(FIELD_HELP.neutral), 'Relatório inclui a explicação do neutro');
@@ -667,25 +873,24 @@ const split = calculateOffGridLoad({ ...offGridBase, acOutput: 'split_phase' });
 assert(split.transformerStatus === 'native_neutral', 'Bifásico nativo dispensa autotransformador');
 assert(split.transformerSuggestedKva === 0, 'Sem kVA de trafo na saída bifásica');
 assert(
-  almostEqual(split.currentInverterA, split.powerTotalW / (2 * 127)),
-  'Bifásico nativo: corrente por fase em 127 V',
+  almostEqual(split.currentInverterA, lineCurrent220A(split.powerTotalW)),
+  'Bifásico 220 V: I = Ptotal / (220 × FP)',
 );
+assert(split.conductorCount === 2 && split.outputBreakerA === offGrid.outputBreakerA, 'Bifásico 220 V usa o mesmo disjuntor da corrente de linha');
 assert(
   describeOutputCurrent({ ...offGridBase, acOutput: 'split_phase' }, split) ===
-    'Corrente Nominal de Saída: 17,5 A por Fase (127V/220V)',
+    'Inversor Bifásico 220V: 20,2 A (Ptotal / (220 × FP))',
   describeOutputCurrent({ ...offGridBase, acOutput: 'split_phase' }, split),
 );
 const splitReport = buildOffGridReportHtml({ ...offGridBase, acOutput: 'split_phase' }, split, reportMeta);
 assert(splitReport.includes(FIELD_HELP.nativeNeutral), 'PDF repete o aviso de neutro nativo');
 const triOut = calculateOffGridLoad({ ...offGridBase, acOutput: 'triphasic' });
 assert(triOut.transformerStatus === 'native_neutral', 'Trifásico nativo dispensa autotransformador');
+const vectorBi = calcularCorrentesLinhaTrifasico({ I_RS: 20, I_ST: 15, I_TR: 0 });
+assert(almostEqual(triOut.currentInverterA, vectorBi.I_Max), 'Trifásico na medição bifásica usa o Imax vetorial');
+assert(triOut.inverterSuggestedKw !== offGrid.inverterSuggestedKw, 'Trocar para trifásico muda o porte do inversor');
 assert(
-  almostEqual(triOut.currentInverterA, triOut.powerTotalW / (3 * 127)),
-  'Trifásico 127/220: corrente por fase',
-);
-assert(
-  describeOutputCurrent({ ...offGridBase, acOutput: 'triphasic' }, triOut) ===
-    'Corrente Nominal de Saída: 11,67 A por Fase (Trifásico)',
+  describeOutputCurrent({ ...offGridBase, acOutput: 'triphasic' }, triOut).includes('Inversor Trifásico'),
   describeOutputCurrent({ ...offGridBase, acOutput: 'triphasic' }, triOut),
 );
 const tri380Out = calculateOffGridLoad({
@@ -694,10 +899,9 @@ const tri380Out = calculateOffGridLoad({
   triPair: '220_380',
   acOutput: 'triphasic',
 });
-assert(
-  almostEqual(tri380Out.currentInverterA, tri380Out.powerTotalW / (3 * 220)),
-  'Trifásico 220/380: corrente por fase em 220 V',
-);
+assert(almostEqual(tri380Out.topology.triphasicA, vectorTri.I_Max), '220/380 trifásico publica o Imax vetorial');
+assert(almostEqual(tri380Out.currentInverterA, vectorTri.I_Max), 'Trifásico 220/380 entrega o Imax vetorial');
+assert(tri380Out.sizedByLinePeak, '220/380 desbalanceado eleva o inversor pelo Imax');
 const monoOut = calculateOffGridLoad({ ...offGridBase, supply: 'mono', monoVoltage: 127, currentA: 8, acOutput: 'split_phase' });
 assert(monoOut.transformerStatus === 'native_neutral', 'Saída com neutro nativo avisa mesmo no padrão monofásico');
 console.log(

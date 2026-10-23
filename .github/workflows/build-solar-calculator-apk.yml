@@ -8,6 +8,9 @@ on:
       - 'cursor/**'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -83,3 +86,18 @@ jobs:
           name: solar-calculator-apk
           path: artifact/SolarCalculator-v*.apk
           retention-days: 30
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v${VERSION}"
+          APK="artifact/SolarCalculator-v${VERSION}.apk"
+          test -f "$APK"
+          NOTES="Solar Calculator ${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" --title "Solar Calculator ${VERSION}" --notes "$NOTES"
+          fi

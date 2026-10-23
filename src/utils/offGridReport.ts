@@ -3,6 +3,7 @@ import {
   AcOutputTopology,
   batteryModelById,
   BatteryTech,
+  CABLE_INSULATION_LABEL,
   OffGridLoadInput,
   OffGridLoadResult,
   recommendedAcBreakerA,
@@ -57,9 +58,9 @@ export function supplyHelp(supply: SupplyStandard): string {
 }
 
 export function acOutputTag(output: AcOutputTopology): string {
-  if (output === 'mono220') return 'Saída AC: 220V Monofásica';
-  if (output === 'split_phase') return 'Saída AC: Bifásica Nativa (127V/220V)';
-  return 'Saída AC: Trifásica Nativa (3F+N)';
+  if (output === 'mono220') return 'Inversor Monofásico 220V';
+  if (output === 'split_phase') return 'Inversor Bifásico 220V';
+  return 'Inversor Trifásico';
 }
 
 export function acOutputTitle(output: AcOutputTopology): string {
@@ -99,16 +100,67 @@ function pct(fraction: number): string {
   return `${formatNumber(fraction * 100, 1)}%`;
 }
 
+/** Compara a mesma potência nas três topologias de saída. */
+export function describeTopologyComparison(result: OffGridLoadResult): string {
+  const { mono220A, splitPhaseA, triphasicA } = result.topology;
+  return `Monofásico 220 V: ${formatNumber(mono220A)} A · Bifásico 220 V: ${formatNumber(splitPhaseA)} A · Trifásico Imax: ${formatNumber(triphasicA)} A`;
+}
+
+/** Pico medido no alicate e a linha vetorial I_R, I_S, I_T. */
+export function describeLinePeak(result: OffGridLoadResult): string {
+  const measured = `Imax medido ${formatNumber(result.measuredLine.I_Max)} A (R ${formatNumber(result.measuredLine.I_R)} · S ${formatNumber(result.measuredLine.I_S)} · T ${formatNumber(result.measuredLine.I_T)})`;
+  const vector = result.phasePhaseVector;
+  return `${measured}. Soma vetorial: R ${formatNumber(vector.I_R)} A · S ${formatNumber(vector.I_S)} A · T ${formatNumber(vector.I_T)} A · Imax ${formatNumber(vector.I_Max)} A`;
+}
+
+export const NEUTRAL_NOT_MEASURED_NOTE =
+  'Neutro: Não medido em campo. A distribuição de carga de 127V e o desequilíbrio de fase foram estimados com base nas correntes de linha medidas nas fases.';
+
+export const MODULAR_INVERTER_ADVANTAGE =
+  'Redundância operacional, menor impacto na corrente de partida, facilidade de transporte/manutenção e expansão modular.';
+
+/** Linha de equipamento do card executivo, já com a potência total. */
+export function describeModularEquipment(result: OffGridLoadResult): string {
+  const plan = result.modularInverter;
+  const power = formatNumber(plan.totalKw);
+  const model =
+    plan.kind === 'triphasic'
+      ? `${plan.quantity}x Inversores Off-Grid Trifásicos 12 kW em Paralelo`
+      : `${plan.quantity}x Inversores Off-Grid Monofásicos EPEVER HP5500 5,5 kW em Paralelo`;
+  return `${model} (Potência Total: ${power} kW)`;
+}
+
+/** Capacidade do barramento e a folga de 20% sobre a fase crítica. */
+export function describeModularBus(result: OffGridLoadResult): string {
+  const plan = result.modularInverter;
+  const capacity =
+    plan.kind === 'triphasic'
+      ? `${formatNumber(plan.quantity * plan.unitCurrentA, 1)} A por fase`
+      : `${plan.quantity * plan.unitCurrentA} A em 220V`;
+  const critical = formatNumber(plan.criticalPhaseA, 1);
+  const design = formatNumber(plan.designCurrentA, 1);
+  return `${capacity} (Atende com folga a fase crítica de ${critical} A + 20% de margem = ${design} A)`;
+}
+
+export function describeOutputProtection(result: OffGridLoadResult): string {
+  const section = Number.isInteger(result.conductorMm2)
+    ? String(result.conductorMm2)
+    : formatNumber(result.conductorMm2);
+  const poles = result.conductorCount === 3 ? '3 condutores carregados' : '2 condutores carregados';
+  return `Disjuntor CA: ${result.outputBreakerA} A · Condutor de alimentação: ${section} mm² (${CABLE_INSULATION_LABEL[result.cableInsulation]}, ${poles}, método B1)`;
+}
+
 /** Frase do card de resultados, também repetida no PDF. */
 export function describeOutputCurrent(input: OffGridLoadInput, result: OffGridLoadResult): string {
   const amps = formatNumber(result.currentInverterA);
   if (input.acOutput === 'triphasic') {
-    return `Corrente Nominal de Saída: ${amps} A por Fase (Trifásico)`;
+    const vector = result.phasePhaseVector;
+    return `Inversor Trifásico: R ${formatNumber(vector.I_R)} A · S ${formatNumber(vector.I_S)} A · T ${formatNumber(vector.I_T)} A · Imax ${amps} A`;
   }
   if (input.acOutput === 'split_phase') {
-    return `Corrente Nominal de Saída: ${amps} A por Fase (127V/220V)`;
+    return `Inversor Bifásico 220V: ${amps} A (Ptotal / (220 × FP))`;
   }
-  return `Corrente Nominal de Saída: ${amps} A (Monofásico 220V)`;
+  return `Inversor Monofásico 220V: ${amps} A (Ptotal / (220 × FP))`;
 }
 
 export function describeTransformer(result: OffGridLoadResult): string {
@@ -259,23 +311,18 @@ export function buildOffGridReportHtml(
       kw(Math.max(0, input.currentB) * voltageFn),
     ]);
   }
+  const neutralCells: [string, string] = result.neutralOmitted
+    ? ['Não medido', result.concealUnmeasuredSplit ? '—' : `${kw(result.power127W)} (estimado)`]
+    : [`${formatNumber(Math.max(0, input.currentNeutral))} A`, kw(result.power127W)];
   if (input.supply === 'triphasic') {
     measureRows.push([
       'Fase C',
       `${formatNumber(Math.max(0, input.currentC))} A`,
       kw(Math.max(0, input.currentC) * voltageFn),
     ]);
-    measureRows.push([
-      'Neutro',
-      `${formatNumber(Math.max(0, input.currentNeutral))} A`,
-      kw(result.power127W),
-    ]);
+    measureRows.push(['Neutro', neutralCells[0], neutralCells[1]]);
   } else if (input.supply === 'biphasic') {
-    measureRows.push([
-      'Neutro',
-      `${formatNumber(Math.max(0, input.currentNeutral))} A`,
-      kw(result.power127W),
-    ]);
+    measureRows.push(['Neutro', neutralCells[0], neutralCells[1]]);
   }
 
   const table = measureRows
@@ -295,7 +342,15 @@ export function buildOffGridReportHtml(
   const neutralNote =
     input.supply === 'mono'
       ? ''
-      : `<p class="caption">${esc(FIELD_HELP.neutral)}</p>`;
+      : result.neutralOmitted
+        ? `<p class="note">${esc(NEUTRAL_NOT_MEASURED_NOTE)}</p>`
+        : `<p class="caption">${esc(FIELD_HELP.neutral)}</p>`;
+  const shareSub = (share: number) =>
+    result.concealUnmeasuredSplit
+      ? 'não medida em campo'
+      : `${pct(share)}${result.neutralOmitted ? ' (estimado)' : ''}`;
+  const shareKw = (watts: number) =>
+    result.concealUnmeasuredSplit ? '—' : formatNumber(watts / 1000);
   const transformerCard = showTransformer
     ? `<section class="callout trafo">
         <div class="badge">PERIFÉRICO CONDICIONAL</div>
@@ -455,6 +510,8 @@ export function buildOffGridReportHtml(
         <tbody>${table}</tbody>
       </table>
       ${neutralNote}
+      <p class="caption">${esc(describeTopologyComparison(result))}</p>
+      <p class="caption">${esc(describeLinePeak(result))}</p>
       <div class="minis">
         <div class="mini">
           <div class="label">Carga Total Medida (kW)</div>
@@ -462,25 +519,29 @@ export function buildOffGridReportHtml(
         </div>
         <div class="mini">
           <div class="label">${esc(lowShare)}</div>
-          <div class="value">${esc(formatNumber(result.power127W / 1000))}</div>
-          <div class="sub">${esc(pct(result.share127))}</div>
+          <div class="value">${esc(shareKw(result.power127W))}</div>
+          <div class="sub">${esc(shareSub(result.share127))}</div>
         </div>
         <div class="mini">
           <div class="label">${esc(highShare)}</div>
-          <div class="value">${esc(formatNumber(result.power220W / 1000))}</div>
-          <div class="sub">${esc(pct(result.share220))}</div>
+          <div class="value">${esc(shareKw(result.power220W))}</div>
+          <div class="sub">${esc(shareSub(result.share220))}</div>
         </div>
       </div>
 
       <h2>2. Destaques executivos</h2>
       <section class="callout inverter">
         <div class="badge">EQUIPAMENTO PRINCIPAL SELECIONADO</div>
-        <h3>INVERSOR OFF-GRID ${esc(formatNumber(result.inverterSuggestedKw))} kW</h3>
+        <h3>${esc(describeModularEquipment(result))}</h3>
         <div class="spec">
+          <div><div class="label">Equipamento</div><div class="value">${esc(describeModularEquipment(result))}</div></div>
+          <div><div class="label">Capacidade do Barramento</div><div class="value">${esc(describeModularBus(result))}</div></div>
+          <div><div class="label">Vantagem Técnica</div><div class="value">${esc(MODULAR_INVERTER_ADVANTAGE)}</div></div>
           <div><div class="label">Topologia de Saída</div><div class="value">${esc(outputTopologyShort(input.acOutput))}</div></div>
           <div><div class="label">Fator de Utilização Aplicado</div><div class="value">${esc(utilizationLine(result.utilizationFactor))}</div></div>
           <div><div class="label">Corrente Nominal de Saída</div><div class="value">${esc(outputCurrentValue(input, result))}</div></div>
           <div><div class="label">Orientação de Proteção</div><div class="value">Disjuntor CA Recomendado: ${breakerA > 0 ? `${breakerA} A` : 'a definir'}</div></div>
+          <div><div class="label">Condutor de alimentação</div><div class="value">${esc(describeOutputProtection(result))}</div></div>
         </div>
         <p class="caption">${esc(acOutputTitle(input.acOutput))}. ${esc(outputHelp)}</p>
       </section>

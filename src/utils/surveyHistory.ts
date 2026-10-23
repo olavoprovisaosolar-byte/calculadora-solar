@@ -11,6 +11,7 @@ export type ClientLoadSnapshot = {
   triPair: string;
   utilization: number;
   acOutput: string;
+  cableInsulation: string;
   inverterBus: number;
   busVoltage: number;
   busTouched: boolean;
@@ -41,6 +42,7 @@ export type SurveyRecord = {
   currentNeutralText: string;
   utilization: number;
   acOutput: string;
+  cableInsulation: string;
   inverterBus: number;
   busVoltage: number;
   busTouched: boolean;
@@ -95,6 +97,8 @@ export function normalizeSurveyHistory(value: unknown): SurveyRecord[] {
           ? cargas.utilization
           : 0.8;
     const acOutput = text(record.acOutput) || text(cargas?.acOutput, 'mono220');
+    const cableInsulation =
+      record.cableInsulation === 'xlpe90' || cargas?.cableInsulation === 'xlpe90' ? 'xlpe90' : 'pvc70';
     const inverterBus = record.inverterBus === 24 || cargas?.inverterBus === 24 ? 24 : 48;
     const busVoltage = record.busVoltage === 24 || cargas?.busVoltage === 24 ? 24 : 48;
     const busTouched = Boolean(record.busTouched ?? cargas?.busTouched);
@@ -111,6 +115,7 @@ export function normalizeSurveyHistory(value: unknown): SurveyRecord[] {
       triPair,
       utilization,
       acOutput,
+      cableInsulation,
       inverterBus,
       busVoltage,
       busTouched,

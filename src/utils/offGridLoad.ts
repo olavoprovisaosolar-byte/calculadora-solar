@@ -1,7 +1,17 @@
 /**
  * Levantamento de carga (alicate) e dimensionamento off-grid / retrofit.
  * Potências em W, tensões em V, correntes em A, energia em Wh.
+ *
+ * As leituras A/B/C são correntes de linha já medidas no condutor.
+ * A potência usa a soma aritmética dessas leituras (Σ I_linha × V_FN).
+ * A soma vetorial entra só na carga fase-fase, quando os ramos RS/ST/TR
+ * são conhecidos, e o I_Max medido cobre o desbalanceamento na saída trifásica.
  */
+import {
+  calcularCorrentesLinhaTrifasico,
+  correntesLinhaMedidas,
+  type CorrenteLinhaResult,
+} from './threePhaseCurrents';
 
 export type BatteryTech = 'lithium' | 'stationary';
 export type BatteryModelId = 'li-48-100' | 'li-24-100' | 'st-12-240' | 'st-12-150';
@@ -28,6 +38,80 @@ export const COMMERCIAL_TRAFO_KVA = [1, 1.5, 2, 3, 5, 7.5, 10, 15, 20, 30, 45, 7
 
 /** Disjuntores CA comerciais (A), do menor para o maior. */
 export const AC_BREAKER_A = [6, 10, 16, 20, 25, 32, 40, 50, 63, 70, 80, 100, 125, 150, 160, 200, 250] as const;
+
+/** Fator de potência da saída em 220 V. Unitário até haver medição de FP. */
+export const OUTPUT_POWER_FACTOR = 1;
+
+/** Margem sobre a maior corrente de fase medida para a corrente de projeto do inversor. */
+export const INVERTER_DESIGN_MARGIN = 1.2;
+
+/** Módulo trifásico de 12 kW, 31,5 A por fase (ex.: GoodWe 12 kW 220 V/127 V). */
+export const TRI_MODULE_KW = 12;
+export const TRI_MODULE_A = 31.5;
+
+/** Módulo monofásico de 5,5 kW, 25 A em 220 V (ex.: EPEVER HP5500). */
+export const MONO_MODULE_KW = 5.5;
+export const MONO_MODULE_A = 25;
+
+export type ModularInverterKind = 'triphasic' | 'mono';
+
+export type ModularInverterPlan = {
+  kind: ModularInverterKind;
+  criticalPhaseA: number;
+  designCurrentA: number;
+  quantity: number;
+  unitKw: number;
+  unitCurrentA: number;
+  totalKw: number;
+};
+
+/** Isolação do cabo de alimentação CA. O padrão é PVC 70 °C. */
+export type CableInsulation = 'pvc70' | 'xlpe90';
+
+export const CABLE_INSULATION_LABEL: Record<CableInsulation, string> = {
+  pvc70: 'PVC - 750V (70°C)',
+  xlpe90: 'XLPE / HEPR - 1 kV (90°C)',
+};
+
+type AmpacityRow = { mm2: number; two: number; three: number };
+
+/**
+ * Capacidade de condução de corrente, cobre, método B1 (eletroduto).
+ * Coluna `two`: 2 condutores carregados. Coluna `three`: 3 condutores carregados.
+ * PVC: ABNT NBR 5410 Tabela 36. XLPE/HEPR: Tabela 37.
+ */
+export const NBR5410_B1: Record<CableInsulation, readonly AmpacityRow[]> = {
+  pvc70: [
+    { mm2: 1.5, three: 13.5, two: 15.5 },
+    { mm2: 2.5, three: 18, two: 24 },
+    { mm2: 4, three: 24, two: 32 },
+    { mm2: 6, three: 31, two: 41 },
+    { mm2: 10, three: 42, two: 57 },
+    { mm2: 16, three: 56, two: 76 },
+    { mm2: 25, three: 73, two: 101 },
+    { mm2: 35, three: 89, two: 125 },
+    { mm2: 50, three: 108, two: 151 },
+    { mm2: 70, three: 136, two: 192 },
+    { mm2: 95, three: 164, two: 232 },
+  ],
+  xlpe90: [
+    { mm2: 1.5, three: 17, two: 20 },
+    { mm2: 2.5, three: 23, two: 30 },
+    { mm2: 4, three: 31, two: 40 },
+    { mm2: 6, three: 40, two: 51 },
+    { mm2: 10, three: 54, two: 69 },
+    { mm2: 16, three: 73, two: 100 },
+    { mm2: 25, three: 95, two: 119 },
+    { mm2: 35, three: 117, two: 146 },
+    { mm2: 50, three: 141, two: 175 },
+    { mm2: 70, three: 179, two: 221 },
+    { mm2: 95, three: 216, two: 265 },
+  ],
+};
+
+export function cableInsulationOf(value: unknown): CableInsulation {
+  return value === 'xlpe90' ? 'xlpe90' : 'pvc70';
+}
 
 /** Folga de 30% no trafo: P_trafo = P_127 / 0,70. */
 export const TRAFO_LOAD_FACTOR = 0.7;
@@ -147,6 +231,8 @@ export type OffGridLoadInput = {
   batteryModelId: BatteryModelId;
   /** Fração 0–1 (ex.: 0,92). */
   inverterEfficiency: number;
+  /** Isolação do cabo CA. Ausente significa PVC 70 °C. */
+  cableInsulation?: CableInsulation;
 };
 
 export type OffGridLoadResult = {
@@ -178,6 +264,43 @@ export type OffGridLoadResult = {
     stationary: BatteryArrangement;
   };
   neutralInconsistent: boolean;
+  /** Alicate nas fases R, S e T. I_Max é o maior valor medido. */
+  measuredLine: CorrenteLinhaResult;
+  /**
+   * I_R, I_S e I_T pela soma vetorial das correntes de fase
+   * (I_RS = fase A, I_ST = fase B, I_TR = fase C).
+   */
+  phasePhaseVector: CorrenteLinhaResult;
+  /** Mesma potência total nas três topologias de saída. */
+  topology: {
+    mono220A: number;
+    splitPhaseA: number;
+    triphasicA: number;
+  };
+  /**
+   * Saída trifásica: a potência sobe para cada fase entregar o Imax vetorial.
+   */
+  sizedByLinePeak: boolean;
+  /** FP usado em I = Ptotal / (220 × FP). */
+  powerFactor: number;
+  /** Disjuntor da saída, acima de 125% da corrente nominal. */
+  outputBreakerA: number;
+  /** Menor seção do método B1 cuja ampacidade cobre o disjuntor. */
+  conductorMm2: number;
+  /** 2 na saída 220 V monofásica/bifásica; 3 na saída trifásica. */
+  conductorCount: 2 | 3;
+  cableInsulation: CableInsulation;
+  /**
+   * Neutro bifásico ou trifásico em branco ou zero.
+   * A parcela de 127 V e o desequilíbrio saem das correntes de linha.
+   */
+  neutralOmitted: boolean;
+  /**
+   * A estimativa da parcela de 127 V fecha em zero.
+   * O relatório não mostra 0% nem trata o desequilíbrio como nulo.
+   */
+  concealUnmeasuredSplit: boolean;
+  modularInverter: ModularInverterPlan;
 };
 
 export function nextCommercialSize(value: number, steps: readonly number[]): number {
@@ -190,6 +313,15 @@ export function nextCommercialSize(value: number, steps: readonly number[]): num
   return Math.ceil((value - 1e-9) / increment) * increment;
 }
 
+/**
+ * Corrente de linha em 220 V: I = Ptotal / (220 × FP).
+ * Vale para a saída monofásica e para a bifásica em 220 V.
+ */
+export function lineCurrent220A(powerW: number, powerFactor = OUTPUT_POWER_FACTOR): number {
+  if (!(powerW > 0) || !(powerFactor > 0)) return 0;
+  return powerW / (220 * powerFactor);
+}
+
 /** Corrente nominal que a topologia de saída precisa entregar. */
 export function nominalOutputCurrentA(
   powerW: number,
@@ -197,12 +329,11 @@ export function nominalOutputCurrentA(
   voltageFn: number,
 ): number {
   if (!(powerW > 0)) return 0;
-  if (acOutput === 'split_phase') return powerW / (2 * 127);
   if (acOutput === 'triphasic') {
     const phaseVoltage = voltageFn > 0 ? voltageFn : 127;
     return powerW / (3 * phaseVoltage);
   }
-  return powerW / 220;
+  return lineCurrent220A(powerW);
 }
 
 /**
@@ -212,6 +343,74 @@ export function nominalOutputCurrentA(
 export function recommendedAcBreakerA(currentA: number): number {
   if (!(currentA > 0)) return 0;
   return nextCommercialSize(currentA * 1.25, AC_BREAKER_A);
+}
+
+/**
+ * Corrente de neutro estimada quando o campo não foi medido.
+ * Trifásico: soma fasorial a 120° das correntes de linha.
+ * Bifásico: a parcela comum pode ser carga fase-fase; só a diferença volta pelo neutro.
+ */
+export function estimateNeutralCurrentA(
+  currentA: number,
+  currentB: number,
+  currentC: number,
+  supply: SupplyStandard,
+): number {
+  const a = Math.max(0, currentA);
+  const b = supply === 'mono' ? 0 : Math.max(0, currentB);
+  const c = supply === 'triphasic' ? Math.max(0, currentC) : 0;
+  if (supply === 'triphasic') {
+    const sumSq = a * a + b * b + c * c - a * b - b * c - c * a;
+    return Math.sqrt(Math.max(0, sumSq));
+  }
+  if (supply === 'biphasic') return Math.abs(a - b);
+  return 0;
+}
+
+/**
+ * Quantidade de inversores em paralelo a partir da maior fase medida, com 20% de margem.
+ * Saída trifásica: módulos de 12 kW / 31,5 A por fase.
+ * Saída monofásica ou bifásica em 220 V: módulos de 5,5 kW / 25 A.
+ */
+export function selectModularInverter(
+  acOutput: AcOutputTopology,
+  currentA: number,
+  currentB: number,
+  currentC: number,
+): ModularInverterPlan {
+  const criticalPhaseA = Math.max(0, currentA, currentB, currentC);
+  const designCurrentA = criticalPhaseA * INVERTER_DESIGN_MARGIN;
+  const tri = acOutput === 'triphasic';
+  const unitCurrentA = tri ? TRI_MODULE_A : MONO_MODULE_A;
+  const unitKw = tri ? TRI_MODULE_KW : MONO_MODULE_KW;
+  const quantity = designCurrentA > 0 ? Math.ceil(designCurrentA / unitCurrentA - 1e-9) : 0;
+  return {
+    kind: tri ? 'triphasic' : 'mono',
+    criticalPhaseA,
+    designCurrentA,
+    quantity,
+    unitKw,
+    unitCurrentA,
+    totalKw: quantity * unitKw,
+  };
+}
+
+/**
+ * Menor seção do método B1 cuja ampacidade cobre a corrente de projeto.
+ * 3 condutores na saída trifásica; 2 condutores na saída 220 V mono/bifásica.
+ */
+export function recommendedConductorMm2(
+  designA: number,
+  loadedConductors: 2 | 3,
+  insulation: CableInsulation = 'pvc70',
+): number {
+  if (!(designA > 0)) return 0;
+  const table = NBR5410_B1[cableInsulationOf(insulation)];
+  const column = loadedConductors === 3 ? 'three' : 'two';
+  for (const row of table) {
+    if (designA <= row[column] + 1e-9) return row.mm2;
+  }
+  return table[table.length - 1].mm2;
 }
 
 function ceilCount(total: number, unit: number): number {
@@ -346,13 +545,14 @@ export function validateOffGridInput(input: OffGridLoadInput): string | null {
 /**
  * Separa carga 127 V (pelo neutro) e 220 V, dimensiona inversor, trafo e banco.
  * P_127 = I_neutro × V_FN
- * P_total = (Σ I_fases) × V_FN
+ * P_total = (Σ I_linha medidas) × V_FN
  * P_220 = P_total − P_127
- * Saída monofásica 220 V: I = P_total / 220
- * Saída bifásica nativa: I por fase = P_total / (2 × 127)
- * Saída trifásica: I por fase = P_total / (3 × V_FN)
- * P_inv = P_total / FU
- * E_Wh = P_total × horas / η_inv
+ * Saída monofásica ou bifásica 220 V: I = P_total / (220 × FP)
+ * Saída trifásica: I_R, I_S e I_T pela soma vetorial das correntes de fase.
+ * O equipamento principal usa I_projeto = max(fases medidas) × 1,20
+ * e módulos de 12 kW (trifásico) ou 5,5 kW (mono/bifásico 220 V).
+ * Neutro em branco ou zero: a parcela de 127 V é estimada pelas linhas.
+ * E_Wh = P_total × horas / η_inv  (energia real, sem inflar pelo pico)
  */
 export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult {
   const { voltageFn, voltageFf } = supplyVoltages(input);
@@ -360,6 +560,10 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
   const currentB = input.supply === 'mono' ? 0 : Math.max(0, input.currentB);
   const currentC = input.supply === 'triphasic' ? Math.max(0, input.currentC) : 0;
   const currentNeutral = input.supply === 'mono' ? 0 : Math.max(0, input.currentNeutral);
+  const neutralOmitted = input.supply !== 'mono' && !(currentNeutral > 1e-9);
+  const neutralForSplit = neutralOmitted
+    ? estimateNeutralCurrentA(currentA, currentB, currentC, input.supply)
+    : currentNeutral;
   const phaseSum = currentA + currentB + currentC;
 
   let power127W: number;
@@ -372,20 +576,46 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
     power220W = input.monoVoltage === 220 ? powerTotalW : 0;
     neutralInconsistent = false;
   } else {
-    power127W = currentNeutral * voltageFn;
+    power127W = neutralForSplit * voltageFn;
     powerTotalW = phaseSum * voltageFn;
     const raw220 = powerTotalW - power127W;
-    neutralInconsistent = raw220 < -1e-6;
+    neutralInconsistent = !neutralOmitted && raw220 < -1e-6;
     power220W = Math.max(0, raw220);
   }
   const chart127 = Math.min(Math.max(0, power127W), powerTotalW);
   const share127 = powerTotalW > 0 ? chart127 / powerTotalW : 0;
   const share220 = powerTotalW > 0 ? 1 - share127 : 0;
+  const concealUnmeasuredSplit = neutralOmitted && share127 < 0.005;
 
-  const currentInverterA = nominalOutputCurrentA(powerTotalW, input.acOutput, voltageFn);
-  const inverterMinW =
-    input.utilizationFactor > 0 ? powerTotalW / input.utilizationFactor : 0;
-  const inverterSuggestedKw = nextCommercialSize(inverterMinW / 1000, COMMERCIAL_INVERTER_KW);
+  const measuredLine = correntesLinhaMedidas({
+    I_R: currentA,
+    I_S: currentB,
+    I_T: currentC,
+  });
+  const phasePhaseVector = calcularCorrentesLinhaTrifasico({
+    I_RS: currentA,
+    I_ST: currentB,
+    I_TR: currentC,
+  });
+  const line220A = lineCurrent220A(powerTotalW, OUTPUT_POWER_FACTOR);
+  const topology = {
+    mono220A: line220A,
+    splitPhaseA: line220A,
+    triphasicA: phasePhaseVector.I_Max,
+  };
+
+  const triOutput = input.acOutput === 'triphasic';
+  const peakDemandW = 3 * phasePhaseVector.I_Max * voltageFn;
+  const sizedByLinePeak = triOutput && peakDemandW > powerTotalW + 1e-6;
+  const demandW = triOutput ? Math.max(powerTotalW, peakDemandW) : powerTotalW;
+  const currentInverterA = triOutput ? phasePhaseVector.I_Max : line220A;
+  const inverterMinW = input.utilizationFactor > 0 ? demandW / input.utilizationFactor : 0;
+  const outputBreakerA = recommendedAcBreakerA(currentInverterA);
+  const conductorCount: 2 | 3 = triOutput ? 3 : 2;
+  const cableInsulation = cableInsulationOf(input.cableInsulation);
+  const conductorMm2 = recommendedConductorMm2(outputBreakerA, conductorCount, cableInsulation);
+  const modularInverter = selectModularInverter(input.acOutput, currentA, currentB, currentC);
+  const inverterSuggestedKw = modularInverter.totalKw;
 
   const hasNeutralSplit = input.supply === 'biphasic' || input.supply === 'triphasic';
   const nativeNeutral = input.acOutput === 'split_phase' || input.acOutput === 'triphasic';
@@ -455,5 +685,17 @@ export function calculateOffGridLoad(input: OffGridLoadInput): OffGridLoadResult
       ),
     },
     neutralInconsistent,
+    measuredLine,
+    phasePhaseVector,
+    topology,
+    sizedByLinePeak,
+    powerFactor: OUTPUT_POWER_FACTOR,
+    outputBreakerA,
+    conductorMm2,
+    conductorCount,
+    cableInsulation,
+    neutralOmitted,
+    concealUnmeasuredSplit,
+    modularInverter,
   };
 }
